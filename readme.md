@@ -456,3 +456,95 @@ SortedSet的常见命令有：
 
 - **升序**获取sorted set 中的指定元素的排名：ZRANK key member
 - **降序**获取sorted set 中的指定元素的排名：ZREVRANK key memeber
+
+## 5. redis的java客户端
+
+在Redis官网中提供了各种语言的客户端，地址：https://redis.io/docs/clients/
+
+![image-20240801155208522](images/readme.assets/image-20240801155208522.png)
+
+### 5.1 jedis快速入门
+
+1. 引入依赖
+
+   ```xml
+   <dependency>
+       <groupId>redis.clients</groupId>
+       <artifactId>jedis</artifactId>
+       <version>5.1.2</version>
+   </dependency>
+   ```
+
+2. 建立连接使用
+
+   ```java
+   public class jredisTest {
+   
+       private Jedis jedis;
+   
+       @BeforeEach
+       void setUp() {
+           //建立连接
+           jedis = new Jedis("192.168.231.130", 6379);
+   
+           //密码认证，由于没有设置redis密码就
+   //      jedis.auth();
+   
+           //选择redis库 0-15
+           jedis.select(0);
+       }
+   
+       @Test
+       void testString() {
+           String result = jedis.set("name", "lishuo");
+           System.out.println("result = " + result);
+           String value = jedis.get("name");
+           System.out.println("value = " + value);
+       }
+   
+       @AfterEach
+       void tearDown() {
+           if (jedis != null){
+               jedis.close();
+           }
+       }
+   }
+   ```
+
+### 5.2 Jedis连接池
+
+Jedis本身是线程不安全的，并且频繁的创建和销毁连接会有性能损耗，因此我们推荐大家使用Jedis连接池代替Jedis的直连方式。
+
+* 创建连接池
+
+  ```java
+  public class JedisConnectionFactory {
+  
+      private  static  final JedisPool jedispool;
+  
+      static {
+          JedisPoolConfig jedisPoolConfig = new JedisPoolConfig();
+          //最大连接数
+          jedisPoolConfig.setMaxTotal(8);
+          //最大空闲连接
+          jedisPoolConfig.setMaxIdle(8);
+          //最小空闲连接
+          jedisPoolConfig.setMinIdle(1);
+          //等待时长，当没有连接可以使用，要等待多长时间
+          jedisPoolConfig.setMaxWaitMillis(1000);
+  
+          jedispool = new JedisPool(jedisPoolConfig,"192.168.231.130",
+                  6379,1000);
+      }
+  
+      public static Jedis getJedis(){
+          return jedispool.getResource();
+      }
+  
+  }
+  ```
+
+
+
+
+
