@@ -546,5 +546,322 @@ Jedis本身是线程不安全的，并且频繁的创建和销毁连接会有性
 
 
 
+## 6 SpringDataRedis
+
+SpringData是Spring中数据操作的模块，包含对各种数据库的集成，其中对Redis的集成模块就叫做SpringDataRedis，官网地址：https://spring.io/projects/spring-data-redis
+
+* 提供了对不同Redis客户端的整合（Lettuce和Jedis）
+* 提供了RedisTemplate统一API来操作Redis
+* 支持Redis的发布订阅模型
+* 支持Redis哨兵和Redis集群
+* 支持基于Lettuce的响应式编程
+* **支持基于JDK.JSON.字符串.Spring对象的数据序列化及反序列化**
+* 支持基于Redis的JDKCollection实现
+
+SpringDataRedis中提供了RedisTemplate工具类，其中封装了各种对Redis的操作。并且将不同数据类型的操作API封装到了不同的类型中：
+
+   ![image-20240801174434078](images/readme.assets/image-20240801174434078.png)
+
+### 6.1 快速入门
+
+* 引入依赖
+
+  ```java
+  <dependency>
+              <groupId>org.springframework.boot</groupId>
+              <artifactId>spring-boot-starter-data-redis</artifactId>
+   </dependency>
+  ```
+
+* 配置
+
+  ```yaml
+  spring:
+    data:
+      redis:
+        host: 192.168.231.130
+        port: 6379
+        lettuce:
+          pool:
+            max-active: 8 #最大连接
+            max-idle: 8 #最大空闲连接
+            min-idle: 0 #最小空闲连接
+            max-wait: 1000ms #连接等待时间
+  ```
+
+* 例子
+
+  ```java
+  @SpringBootTest
+  class MainApplicationTest {
+  
+      @Autowired
+      private RedisTemplate redisTemplate;
+  
+      @Test
+      void testString(){
+          ValueOperations valueOperations = redisTemplate.opsForValue();
+          valueOperations.set("name0","hnsqls0");
+          Object result = valueOperations.get("name0");
+          System.out.println("result = " + result);
+      }
+  }
+  ```
+
+  ![image-20240801225010051](images/readme.assets/image-20240801225010051.png)
+
+再linux上查看redis数据
+
+查看发现没有name0，是没插入redis中？查看所有的key，发现有个乱码。
+
+![image-20240801225212603](images/readme.assets/image-20240801225212603.png)
+
+这是因为set的不是字符串。
+
+![image-20240801225505095](images/readme.assets/image-20240801225505095.png)
+
+### 6.2 数据序列化器
+
+RedisTemplate可以接收任意Object作为值写入Redis：
+
+![image-20240801230010022](images/readme.assets/image-20240801230010022.png)
+
+只不过写入前会把Object序列化为字节形式，默认是采用JDK序列化，得到的结果是这样的：
+
+![image-20240801230052884](images/readme.assets/image-20240801230052884.png)
+
+缺点：
+
+- 可读性差
+- 内存占用较大
 
 
+
+查看RedisTemplete源码
+
+![image-20240802095015227](images/readme.assets/image-20240802095015227.png)
+
+![image-20240802095046283](images/readme.assets/image-20240802095046283.png)
+
+可以知道如果没有指定序列化器默认就是null，如果序列化器是null就采用jdk提供的序列化器。
+
+为了解决这种问题，我们可以设置redis序列化器。
+
+查看RedisSerializer的实现类
+
+![image-20240802095713945](images/readme.assets/image-20240802095713945.png)
+
+其中**StringRedisSerializer** 是序列化string类型的数据，再redis中key的值一般都是string类型，那么再序列化key的时候就可以选择该类型序列化器
+
+其中**GenericJackson2RedisSerializer** 是序列化对象成为json的类型，序列化value就选用这个序列化器。
+
+
+
+如何配置？
+
+再配置类中添加bean  再com.ls.config.redis包下
+
+```java
+@Configuration
+public class RedisConfig {
+
+    @Bean
+    public RedisTemplate<String, Object> redisTemplate(){
+
+        RedisTemplate<String, Object> stringObjectRedisTemplate = new RedisTemplate<>();
+
+
+        //创建连接工厂  RedisConnectionFactory redisConnectionFactory = new RedisConnectionFactory();
+        RedisConnectionFactory redisConnectionFactory = new LettuceConnectionFactory();
+       //RedisConnectionFactory redisConnectionFactory = new JedisConnectionFactory();
+
+        //设置连接工厂
+        stringObjectRedisTemplate.setConnectionFactory(redisConnectionFactory);
+
+        //创建序列化器
+        StringRedisSerializer stringRedisSerializer = new StringRedisSerializer();
+        GenericJackson2JsonRedisSerializer genericJackson2JsonRedisSerializer = new GenericJackson2JsonRedisSerializer();
+
+        //设置序列化器
+        stringObjectRedisTemplate.setKeySerializer(stringRedisSerializer);
+        stringObjectRedisTemplate.setHashKeySerializer(stringRedisSerializer);
+        stringObjectRedisTemplate.setValueSerializer(genericJackson2JsonRedisSerializer);
+        stringObjectRedisTemplate.setHashValueSerializer(genericJackson2JsonRedisSerializer);
+
+        return stringObjectRedisTemplate;
+    }
+}
+
+```
+
+测试类
+
+```java
+@SpringBootTest
+class MainApplicationTest {
+
+    @Autowired
+    private RedisTemplate<String, Object> redisTemplate;
+
+    @Test
+    void testString(){
+        ValueOperations valueOperations = redisTemplate.opsForValue();
+        valueOperations.set("name0","hnsqls0");
+
+        Object result = valueOperations.get("name0");
+        System.out.println("result = " + result);
+    }
+}
+```
+
+
+
+![image-20240802103640553](images/readme.assets/image-20240802103640553.png)
+
+没有jackson处理类，引入jackson依赖
+
+```xml
+  <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+```
+
+还是错误
+
+![image-20240802104719302](images/readme.assets/image-20240802104719302.png)
+
+再配置连接工厂的时候错误，但是不明白为什么
+
+![image-20240802104834987](images/readme.assets/image-20240802104834987.png)
+
+这样就可以运行成功，不明白，而且这个用接口接收值，是接收的Lettuer还是Jedis连接工厂，为什么那样错？
+
+查看结果，显示正常
+
+![image-20240802105409814](images/readme.assets/image-20240802105409814.png)
+
+存一个对象看看序列结果
+
+新建User类，com.ls.pojo
+
+```xml
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+        </dependency>
+```
+
+```java
+@Data
+@AllArgsConstructor
+public class User {
+    private String name;
+    private int age;
+}
+```
+
+测试类
+
+```java
+    @Test
+    void TestSavaUser(){
+        redisTemplate.opsForValue()
+                .set("test:user:100",new User("hnsqls",21));
+
+        User o = (User) redisTemplate.opsForValue().get("test:user:100");
+        System.out.println("o = " + o);
+    }
+```
+
+![image-20240802111103087](images/readme.assets/image-20240802111103087.png)
+
+反序列化失败，原因是jason反序列化对象时，对象没有提供无参构造器或setget方法，此处我们没有提供无参构造方法
+
+```java
+@Data
+@AllArgsConstructor
+@NoArgsConstructor //反序列化需要
+public class User {
+    private String name;
+    private int age;
+}
+```
+
+![image-20240802111313186](images/readme.assets/image-20240802111313186.png)
+
+![image-20240802111409371](images/readme.assets/image-20240802111409371.png)
+
+再redis中多存入了类名，占用了内存开销，但是自动反序列话又需要。
+
+### 6.3 StringRedisTemplate
+
+尽管JSON的序列化方式可以满足我们的需求，但依然存在一些问题,为了在反序列化时知道对象的类型，JSON序列化器会将类的class类型写入json结果中，存入Redis，会带来额外的内存开销。
+
+
+
+为了减少内存开销，我们都使用string类型处理，当需要对象的时候再手动转化
+
+![image-20240802111923864](images/readme.assets/image-20240802111923864.png)
+
+这种用法比较普遍，因此SpringDataRedis就提供了RedisTemplate的子类：StringRedisTemplate，它的key和value的序列化方式默认就是String方式。
+
+![image-20240802112455702](images/readme.assets/image-20240802112455702.png)
+
+测试类
+
+```java
+
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
+
+    @Test
+    void testString(){
+        ValueOperations valueOperations = stringRedisTemplate.opsForValue();
+        valueOperations.set("test:stringRedis:user:1","hnsqls0");
+
+        Object result = valueOperations.get("name0");
+        System.out.println("result = " + result);
+    }
+```
+
+结果
+
+![image-20240802113519814](images/readme.assets/image-20240802113519814.png)
+
+测试类---》对象
+
+```java
+     @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
+    //序列化反序列话工具
+    private static final ObjectMapper mapper = new ObjectMapper();
+
+	@Test
+    void TestSavaUser() throws JsonProcessingException {
+
+        User user = new User("hnsqls02",21);
+
+        //序列化
+        String json = mapper.writeValueAsString(user);
+
+        //存入redis
+        stringRedisTemplate.opsForValue()
+                .set("test:stringRedis:user:2",json);
+
+        //从redis取数据
+        String json1 = stringRedisTemplate.opsForValue()
+                .get("test:stringRedis:user:2");
+
+        //反序列化
+        User user1 = mapper.readValue(json1, User.class);
+        System.out.println("user1 = " + user1);
+
+    }
+```
+
+![image-20240802114535969](images/readme.assets/image-20240802114535969.png)
+
+正常显示，并且没有额外占用内存。
