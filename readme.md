@@ -865,3 +865,83 @@ public class User {
 ![image-20240802114535969](images/readme.assets/image-20240802114535969.png)
 
 正常显示，并且没有额外占用内存。
+
+
+
+# 项目实战
+
+## 1 准备
+
+### 1.1 后端初始化
+
+
+
+1. 新建数据库，导入sql文件
+
+   ![image-20240802122416793](images/readme.assets/image-20240802122416793.png)
+
+2.  导入初始化代码
+
+   修改redis配置和mysql配置
+   
+3. 启动测试
+
+```java
+Caused by: java.lang.IllegalArgumentException: Unsupported class file major version 61
+	at org.springframework.asm.ClassReader.<init>(ClassReader.java:196) ~[spring-core-5.2.15.RELEASE.jar:5.2.15.RELEASE]
+	at org.springframework.asm.ClassReader.<init>(ClassReader.java:177) ~[spring-core-5.2.15.RELEASE.jar:5.2.15.RELEASE]
+	at org.springframework.asm.ClassReader.<init>(ClassReader.java:163) ~[spring-core-5.2.15.RELEASE.jar:5.2.15.RELEASE]
+	at org.springframework.asm.ClassReader.<init>(ClassReader.java:284) ~[spring-core-5.2.15.RELEASE.jar:5.2.15.RELEASE]
+	at org.springframework.core.type.classreading.SimpleMetadataReader.getClassReader(SimpleMetadataReader.java:57) ~[spring-core-5.2.15.RELEASE.jar:5.2.15.RELEASE]
+	... 25 common frames omitted
+```
+
+![image-20240802123349269](images/readme.assets/image-20240802123349269.png)
+
+原因是jdk和springboot版本不匹配，我的jdk是17，而项目中的springboot是2.3.1。换jdk为8。
+
+![image-20240802125338648](images/readme.assets/image-20240802125338648.png)
+
+修改sdk
+
+![image-20240802130714364](images/readme.assets/image-20240802130714364.png)
+
+修改语言级别
+
+![image-20240802130735123](images/readme.assets/image-20240802130735123.png)
+
+修改java编译器
+
+![image-20240802130810744](images/readme.assets/image-20240802130810744.png)
+
+不知为什么，每次刷新maven级别又重新回到17，或许是maven中配置的jdk17的原因。
+
+成功启动
+
+4. 测试
+访问localhost:8081/shop-type/list
+
+   有数据就是成功。
+   
+   
+### 1.2前端初始化
+
+双击nginx.exe
+
+![image-20240802133918570](images/readme.assets/image-20240802133918570.png)
+
+访问8080即可，但是拒绝访问找不到、查看日志文件
+
+![image-20240802134054843](images/readme.assets/image-20240802134054843.png)
+
+```sh
+2024/08/02 13:34:12 [emerg] 3448#4380: CreateFile() "E:\Font_Develepment\黑马点评\nginx-1.18.0/conf/nginx.conf" failed (1113: No mapping for the Unicode character exists in the target multi-byte code page)
+```
+
+路径有中文。修改黑马点评为hmdp
+
+启动成功
+
+![image-20240802134340844](images/readme.assets/image-20240802134340844.png)
+
+   
