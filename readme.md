@@ -1204,4 +1204,94 @@ StrUtil.isBlank(str)  使用了第三方提共的工具类
       }
   ```
 
+
+
+### 2. 4 校验用户，配置拦截器
+
+由于很多页面需要登录才能访问，所以每个请求都要验证用户信息，才能访问。要是一个一个写就太冗余了，可以利用springmvc的拦截器，将需要验证用户的请求都拦截，然后再拦截器中校验用户。
+
+而且请求有时候也会用用户的信息，可以再拦截器中校验用户并保存用户信息到ThreadLocal中，这样该用户之后的请求都能从ThreadLocal中获取用户信息。
+
+* ThreadLocal
+
+```java
+public class UserHolder {
+    private static final ThreadLocal<UserDTO> tl = new ThreadLocal<>();
+
+    public static void saveUser(UserDTO user){
+        tl.set(user);
+    }
+
+    public static UserDTO getUser(){
+        return tl.get();
+    }
+
+    public static void removeUser(){
+        tl.remove();
+    }
+}
+```
+
+* 拦截器
+
+  ```java
+  @Component
+  public class LoginInterceptor implements HandlerInterceptor {
+      @Override
+      public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+          //1. 获取session
+          HttpSession session = request.getSession();
+          // 2. 获取session中的用户
+          Object user = session.getAttribute("user");
+          if (user == null) {
+              //没有用户信息
+              response.setStatus(401);
+              return false;
+          }
+          //3. 保存到ThreadLocal中
+          UserHolder.saveUser((UserDTO) user);
   
+          return true;
+      }
+  
+      @Override
+      public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) throws Exception {
+         //移除信息，避免内存泄露
+          UserHolder.removeUser();
+      }
+  }
+  ```
+
+* 拦截器配置
+
+  ```java
+  @Configuration
+  public class WebMvcConfig implements WebMvcConfigurer {
+      @Autowired
+      private LoginInterceptor loginInterceptor;
+      @Override
+      public void addInterceptors(InterceptorRegistry registry) {
+          registry.addInterceptor(loginInterceptor)
+                  .excludePathPatterns(
+                          "/user/code",
+                          "/user/login"
+                  );
+  
+      }
+  }
+  ```
+
+* 校验用户接口
+
+  * service
+
+    ```java
+        @GetMapping("/me")
+        public Result me(){
+            //获取当前登录的用户并返回
+            return Result.ok(UserHolder.getUser());
+        }
+    ```
+
+    
+
