@@ -1135,3 +1135,73 @@ StrUtil.isBlank(str)  使用了第三方提共的工具类
         </dependency>
 ```
 
+### 2.3 登录和注册接口
+
+![image-20240804111619163](images/readme.assets/image-20240804111619163.png)
+
+* 说明
+  * 请求类型 ：POST
+  * 请求路径：user/login
+  * 请求数据结构：json串，phone，code
+  * ![image-20240804111734707](images/readme.assets/image-20240804111734707.png)
+  * 返回值： 无
+
+
+
+* controller
+
+  ```java
+      /**
+       * 登录功能
+       * @param loginForm 登录参数，包含手机号、验证码；或者手机号、密码
+       */
+      @PostMapping("/login")
+      public Result login(@RequestBody LoginFormDTO loginForm, HttpSession session){
+          // TODO 实现登录功能
+          return userService.login(loginForm,session);
+      }
+  
+  ```
+
+* service
+
+  ```java
+  Result login(LoginFormDTO loginForm, HttpSession session);
+  
+   /**
+       * 登录或注册用户
+       * @param loginForm
+       * @param session
+       * @return
+       */
+      @Override
+      public Result login(LoginFormDTO loginForm, HttpSession session) {
+          //校验验证码
+          String cacheCode = session.getAttribute("code").toString();
+          String code = loginForm.getCode();
+          if (!code.equals(cacheCode)){
+              //验证码不相同
+              return Result.fail("验证码错误");
+          }
+  
+          //根据手机号判断用户是否存在
+          LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+          queryWrapper.eq(User::getPhone,loginForm.getPhone());
+          User user = super.getOne(queryWrapper);
+          if (user ==null){
+              //用户不存在，注册用户，填上基本信息,保存
+              User user1 = new User();
+              user1.setPhone(loginForm.getPhone());
+              user1.setNickName("user_"+RandomUtil.randomString(4));
+              user = user1;
+              //保存到数据库中
+              super.save(user1);
+          }
+          //用户存在就保存在session
+          session.setAttribute("user",user);
+  
+          return Result.ok() ;
+      }
+  ```
+
+  
