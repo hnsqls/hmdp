@@ -870,7 +870,7 @@ public class User {
 
 # 项目实战
 
-## 1 准备
+## 1. 准备
 
 ### 1.1 后端初始化
 
@@ -944,4 +944,194 @@ Caused by: java.lang.IllegalArgumentException: Unsupported class file major vers
 
 ![image-20240802134340844](images/readme.assets/image-20240802134340844.png)
 
-   
+## 2. 登录和注册
+
+### 2.1 登录和注册流程
+
+* 一基于Session的认证
+  * 认证流程
+    * 用户输入账号和密码进行登录。
+
+    * 服务器验证用户信息，如果验证通过，则在服务端生成用户相关的数据保存在Session中（当前会话）。
+
+    * 服务器将Session ID发送给客户端，并存储在客户端的Cookie中。
+
+    * 客户端后续请求时，会带上Session ID，服务器通过验证Session ID来确认用户的身份和会话状态。
+
+    * 当用户退出系统或Session过期销毁时，客户端的Session ID也随之失效。
+
+* 优点
+  * 实现简单，易于理解和维护。
+  * Session信息存储在服务器端，相对安全。
+* 缺点
+
+  * 服务器需要维护大量的Session信息，增加了服务器的存储负担。
+  * Session ID存储在客户端的Cookie中，如果Cookie被窃取，则存在安全风险。
+  * Session认证通常依赖于客户端的Cookie，无状态的服务器无法直接识别用户身份。
+* 适用场景
+  * 适用于用户数量相对较少、服务器资源相对充足的应用场景。
+  * 适用于需要频繁进行状态保持的应用场景，如Web应用中的用户登录状态保持。
+
+
+
+1. **发送验证码：**
+
+​	校验前端发来的手机号是否合法。（前端也要校验，减少不合法的请求，减轻服务器压力，后端也要校验，因为前端校验可以被绕过。）
+
+​	生成验证码
+
+​	验证码保存到session，并响应给前端。
+
+2. **登录或注册**
+
+   校验验证码是否正确。
+
+   校验手机号是否存在于数据库，**若存在就是登录，保用户到session**；若不存在就是注册，**添加些基本信息保存到数据库中并保存用户到session。**
+
+3. **校验登录状态:**
+
+   用户在请求时候，会从cookie中携带者JsessionId到后台，后台通过JsessionId从session中拿到用户信息，如果没有session信息，则进行拦截，如果有session信息，则将用户信息保存到threadLocal中，并且放行
+
+   ![image-20240804095611501](images/readme.assets/image-20240804095611501.png)
+
+
+
+### 2.2 发送验证码接口
+
+![image-20240804100915059](images/readme.assets/image-20240804100915059.png)
+
+* 说明
+  * 请求方式 ：POST
+  * 请求路径 ： /user/code
+  * 请求参数： phone
+  * 返回值： 无
+
+
+
+在userController中
+
+* controller
+
+```java
+    /**
+     * 发送手机验证码
+     */
+    @PostMapping("code")
+    public Result sendCode(@RequestParam("phone") String phone, HttpSession session) {
+        // TODO 发送短信验证码并保存验证码
+
+        return  userService.sendCode(phone,session);
+    }
+
+```
+
+* service
+
+  ```java
+  //接口
+  Result sendCode(String phone, HttpSession session);
+  
+  //实现类
+   /**
+       * 发送短信验证码
+       * @param phone
+       * @param session
+       */
+      @Override
+      public Result sendCode(String phone, HttpSession session) {
+          //判断手机号是否合法
+          if(RegexUtils.isPhoneInvalid(phone)){
+              //不合法， 就返回不符合
+              return Result.fail("手机号不合法");
+          }
+          //合法  生成验证码
+          String code = RandomUtil.randomNumbers(6);
+  
+          //保存到session中
+          session.setAttribute("code",code);
+  
+          //发送验证码到手机   sms服务，先假装发送可以记录到日志中
+          log.debug("发送验证码成功,验证码:{}",code);
+          return Result.ok();
+      }
+  ```
+
+其中，判断手机号是否合法是自己写的工具类
+
+正则匹配的格式
+
+```java
+public abstract class RegexPatterns {
+    /**
+     * 手机号正则
+     */
+    public static final String PHONE_REGEX = "^1([38][0-9]|4[579]|5[0-3,5-9]|6[6]|7[0135678]|9[89])\\d{8}$";
+    /**
+     * 邮箱正则
+     */
+    public static final String EMAIL_REGEX = "^[a-zA-Z0-9_-]+@[a-zA-Z0-9_-]+(\\.[a-zA-Z0-9_-]+)+$";
+    /**
+     * 密码正则。4~32位的字母、数字、下划线
+     */
+    public static final String PASSWORD_REGEX = "^\\w{4,32}$";
+    /**
+     * 验证码正则, 6位数字或字母
+     */
+    public static final String VERIFY_CODE_REGEX = "^[a-zA-Z\\d]{6}$";
+
+}
+```
+
+匹配正则的方法
+
+```java
+public class RegexUtils {
+    /**
+     * 是否是无效手机格式
+     * @param phone 要校验的手机号
+     * @return true:符合，false：不符合
+     */
+    public static boolean isPhoneInvalid(String phone){
+        return mismatch(phone, RegexPatterns.PHONE_REGEX);
+    }
+    /**
+     * 是否是无效邮箱格式
+     * @param email 要校验的邮箱
+     * @return true:符合，false：不符合
+     */
+    public static boolean isEmailInvalid(String email){
+        return mismatch(email, RegexPatterns.EMAIL_REGEX);
+    }
+
+    /**
+     * 是否是无效验证码格式
+     * @param code 要校验的验证码
+     * @return true:符合，false：不符合
+     */
+    public static boolean isCodeInvalid(String code){
+        return mismatch(code, RegexPatterns.VERIFY_CODE_REGEX);
+    }
+
+    // 校验是否不符合正则格式
+    private static boolean mismatch(String str, String regex){
+        if (StrUtil.isBlank(str)) {
+            return true;
+        }
+        return !str.matches(regex);
+    }
+}
+```
+
+StrUtil.isBlank(str)  使用了第三方提共的工具类
+
+生成验证码        String code = RandomUtil.randomNumbers(6);
+
+```xml
+        <!--hutool-->
+        <dependency>
+            <groupId>cn.hutool</groupId>
+            <artifactId>hutool-all</artifactId>
+            <version>5.7.17</version>
+        </dependency>
+```
+
