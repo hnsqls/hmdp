@@ -1293,5 +1293,73 @@ public class UserHolder {
         }
     ```
 
-    
 
+
+
+### 2.5 处理登录敏感信息
+
+  在校验登录的时候，我们通过ThreadLocal将用户登录信息存在了session中，我们查看我们返回的数据，这里面有敏感信息不安全，也有无用信息createtime，updatatime。这些不但会泄露敏感信息而且会占用tomcat服务器的内存。所以说这些信息我们不需要，有两种解决方法
+
+* 一：定义一个登录用户类，仅仅有必要的属性，仅用于用户的验证。在ThreadLocal中存这个登录的类的信息。
+* 二：在用户类上添加@JsonIgnore
+  * `@JsonIgnore` 是 Jackson 库中的一个注解，用于 JSON 序列化和反序列化过程中忽略指定的字段。
+
+![image-20240805183424253](images/readme.assets/image-20240805183424253.png)
+
+这里我使用第二种： 修改user类，添加@JsonIgnore 忽略字段
+
+```java
+@Data
+@EqualsAndHashCode(callSuper = false)
+@Accessors(chain = true)
+@TableName("tb_user")
+public class User implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+
+    /**
+     * 主键
+     */
+    @TableId(value = "id", type = IdType.AUTO)
+    private Long id;
+
+    /**
+     * 手机号码
+     */
+    @JsonIgnore
+    private String phone;
+
+    /**
+     * 密码，加密存储
+     */
+    @JsonIgnore
+    private String password;
+
+    /**
+     * 昵称，默认是随机字符
+     */
+    private String nickName;
+
+    /**
+     * 用户头像
+     */
+    private String icon = "";
+
+    /**
+     * 创建时间
+     */
+    @JsonIgnore
+    private LocalDateTime createTime;
+
+    /**
+     * 更新时间
+     */
+    @JsonIgnore
+    private LocalDateTime updateTime;
+
+
+}
+
+```
+
+![image-20240805184106413](images/readme.assets/image-20240805184106413.png)

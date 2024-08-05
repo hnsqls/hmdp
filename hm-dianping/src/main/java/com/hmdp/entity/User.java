@@ -3,6 +3,7 @@ package com.hmdp.entity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.experimental.Accessors;
@@ -35,11 +36,13 @@ public class User implements Serializable {
     /**
      * 手机号码
      */
+    @JsonIgnore
     private String phone;
 
     /**
      * 密码，加密存储
      */
+    @JsonIgnore
     private String password;
 
     /**
@@ -55,11 +58,13 @@ public class User implements Serializable {
     /**
      * 创建时间
      */
+    @JsonIgnore
     private LocalDateTime createTime;
 
     /**
      * 更新时间
      */
+    @JsonIgnore
     private LocalDateTime updateTime;
 
 
