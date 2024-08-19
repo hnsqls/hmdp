@@ -119,7 +119,7 @@ Cannot find a valid baseurl for repo: base/7/x86_64
 1. 首先备份系统自带yum源配置文件/etc/yum.repos.d/CentOS-Base.repo 
 
 ```shell
-mv/etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.backup
+mv /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.backup
 ```
 
 2. 下载国内yum源配置文件到/etc/yum.repos.d/
@@ -1363,3 +1363,212 @@ public class User implements Serializable {
 ```
 
 ![image-20240805184106413](images/readme.assets/image-20240805184106413.png)
+
+### 2.6 集群的session共享问题
+
+**核心思路分析：**
+
+每个tomcat中都有一份属于自己的session,假设用户第一次访问第一台tomcat，并且把自己的信息存放到第一台服务器的session中，但是第二次这个用户访问到了第二台tomcat，那么在第二台服务器上，肯定没有第一台服务器存放的session，所以此时 整个登录拦截功能就会出现问题，我们能如何解决这个问题呢？早期的方案是session拷贝，就是说虽然每个tomcat上都有不同的session，但是每当任意一台服务器的session修改时，都会同步给其他的Tomcat服务器的session，这样的话，就可以实现session的共享了。
+
+但是这种方案具有两个大问题
+
+1、每台服务器中都有完整的一份session数据，服务器压力过大。
+
+2、session拷贝数据时，可能会出现延迟
+
+![image-20240805185349464](images/readme.assets/image-20240805185349464.png)
+
+****
+
+**所以咱们后来采用的方案都是基于redis来完成，我们把session换成redis，redis数据本身就是共享的，就可以避免session共享的问题了**
+
+### 2.7 用redis解决session共享问题
+
+简单来说，把session的数据（sessionid验证用户）存到redis中。我们可以不要sessionid，定义一个token唯一作为k，验证码作为v。
+
+如果我们采用phone：手机号这个的数据来存储当然是可以的，但是如果把这样的敏感数据存储到redis中并且从页面中带过来毕竟不太合适，所以我们在后台生成一个随机串token，然后让前端带来这个token就能完成我们的整体逻辑了。
+
+**明确整体访问流程**
+
+在用户去登录时会去校验用户提交的手机号和验证码，是否一致，如果一致，则根据手机号查询用户信息，不存在则新建，最后将用户数据保存到redis，并且生成token作为redis的key，当我们校验用户是否登录时，会去携带着token进行访问，从redis中取出token对应的value，判断是否存在这个数据，如果没有则拦截，如果存在则将其保存到threadLocal中，并且放行。
+
+![image-20240805190757331](images/readme.assets/image-20240805190757331.png)
+
+**注意：使用session时候浏览器在请求的时候自动带了sessionid，我们使用redis+token，浏览器并不能自动携带，需要前端请求的时候携带**
+
+![image-20240805192832864](images/readme.assets/image-20240805192832864.png)
+
+* 发送短信验证码接口优化
+
+  我们之前是将验证码存在session中，但是为了解决session共享问题，我们使用redis。业务逻辑有所改变。
+
+  1. 校验手机号是否合法
+     1. 不合法：提示手机号不合法
+     2. 合法： 通过短信服务发送验证码，并以手机号为key，验证码为value存在redis中。
+
+  ```java
+   @Autowired
+      private  StringRedisTemplate redisTemplate;
+      /**
+       * 发送短信验证码
+       * @param phone
+       * @param session
+       */
+      @Override
+      public Result sendCode(String phone, HttpSession session) {
+          //判断手机号是否合法
+          if(RegexUtils.isPhoneInvalid(phone)){
+              //不合法， 就返回不符合
+              return Result.fail("手机号不合法");
+          }
+          //合法  生成验证码
+          String code = RandomUtil.randomNumbers(6);
+  
+          //保存到session中
+          //session.setAttribute("code",code);
+          
+          //以手机号为k，手机验证码为v 保存在redis中
+           redisTemplate.opsForValue().set(phone,code,60, TimeUnit.SECONDS);
+  
+          //发送验证码到手机   sms服务，先假装发送可以记录到日志中
+          log.debug("发送验证码成功,验证码:{}",code);
+          return Result.ok();
+      }
+  ```
+
+* 登录和注册接口优化
+
+  业务逻辑
+
+  1. 验证手机号和验证码是否一致
+     1. 若一致 
+        1. 根据手机号查询DB是否存在该用户
+           1. 不存在，就是注册，填上用户基本信息保存到数据库中，并以随机token为k，用户信息为v存在redis中。
+           2. 存在，以随机token为k，用户信息为v存在redis中
+     2. 若不一致，提示验证码错误。
+  2. 返回给前端token
+
+  ```java
+        /**
+       * 登录或注册用户
+       * @param loginForm
+       * @param session
+       * @return
+       */
+      @Override
+      public Result login(LoginFormDTO loginForm, HttpSession session) {
+          //校验验证码
+  //        String cacheCode = session.getAttribute("code").toString();
+          String cacheCode = redisTemplate.opsForValue().get(RedisConstants.LOGIN_CODE_KEY + loginForm.getPhone());
+          String code = loginForm.getCode();
+          if (!code.equals(cacheCode)){
+              //验证码不相同
+              return Result.fail("验证码错误");
+          }
+  
+          //根据手机号判断用户是否存在
+          LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+          queryWrapper.eq(User::getPhone,loginForm.getPhone());
+          User user = super.getOne(queryWrapper);
+          if (user ==null){
+              //用户不存在，注册用户，填上基本信息,保存
+              User user1 = new User();
+              user1.setPhone(loginForm.getPhone());
+              user1.setNickName("user_"+RandomUtil.randomString(4));
+              user = user1;
+              //保存到数据库中
+              super.save(user1);
+          }
+          //用户存在就保存在session
+          //session.setAttribute("user",user);
+  
+          //用户信息保存在redis中  以随机token为k,用户信息为v
+          String token = UUID.randomUUID().toString(true);
+          //将对象转为hash类型
+          Map<String, Object> usermap = BeanUtil.beanToMap(user,new HashMap<>(),
+                  CopyOptions.create()
+                          .setIgnoreNullValue(true)
+                          .setFieldValueEditor((fieldName,fieldValue) -> fieldValue.toString()));
+          //存在redis中
+          redisTemplate.opsForHash().putAll(RedisConstants.LOGIN_USER_KEY+token,usermap);
+          //设置token有效期
+          redisTemplate.expire(RedisConstants.LOGIN_USER_KEY +token,12,TimeUnit.HOURS);
+  
+          //返回token
+          return Result.ok(token) ;
+      }
+  ```
+  
+  改造拦截器
+  
+  ```java
+  //@Component  拦截器是非常轻量级的组件，只有再需要时才会被调用
+  public class LoginInterceptor implements HandlerInterceptor {
+  
+  
+      private StringRedisTemplate stringRedisTemplate;
+  
+      public LoginInterceptor(StringRedisTemplate stringRedisTemplate) {
+          this.stringRedisTemplate = stringRedisTemplate;
+      }
+  
+      @Override
+      public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+  //        //1. 获取session
+  //        HttpSession session = request.getSession();
+  //        // 2. 获取session中的用户
+  //        Object user = session.getAttribute("user");
+  //        if (user == null) {
+  //            //没有用户信息
+  //            response.setStatus(401);
+  //            return false;
+  //        }
+  //        //3. 保存到ThreadLocal中
+  //        UserHolder.saveUser((User) user);
+  //
+  //        return true;
+  
+          // TODO 1. 获取token
+          String token = request.getHeader("authorization");
+          if (StrUtil.isBlank(token)) {
+              //为空
+              response.setStatus(401);
+              return  false;
+          }
+  
+          // TODO 2.基于token获取redis中的用户
+          Map<Object, Object> objectMap = stringRedisTemplate.opsForHash().entries(RedisConstants.LOGIN_USER_KEY+token);
+          //判断用户是否存在
+          if (objectMap.isEmpty()){
+              //不存在
+              response.setStatus(401);
+              return false;
+          }
+          //将map转对象
+          User user = BeanUtil.fillBeanWithMap(objectMap, new User(), false);
+  
+          //保存再threadLocal
+          UserHolder.saveUser(user);
+  
+          stringRedisTemplate.expire(RedisConstants.LOGIN_USER_KEY+token,RedisConstants.LOGIN_USER_TTL, TimeUnit.SECONDS);
+  
+          return true;
+  
+      }
+  
+      @Override
+      public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) throws Exception {
+         //移除信息，避免内存泄露
+          UserHolder.removeUser();
+      }
+  }
+  
+  ```
+  
+  
+
+  
+
+  
+
+  
