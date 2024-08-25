@@ -66,6 +66,7 @@ public class LoginInterceptor implements HandlerInterceptor {
         //保存再threadLocal
         UserHolder.saveUser(user);
 
+        //刷新token有效期
         stringRedisTemplate.expire(RedisConstants.LOGIN_USER_KEY+token,RedisConstants.LOGIN_USER_TTL, TimeUnit.SECONDS);
 
         return true;

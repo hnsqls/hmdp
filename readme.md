@@ -1564,11 +1564,64 @@ public class User implements Serializable {
   }
   
   ```
-  
-  
 
   
 
-  
+## 3. 商户缓存
 
-  
+### 3.1 什么是缓存
+
+![image-20240819223700210](images/readme.assets/image-20240819223700210.png)
+
+![image-20240819224438044](images/readme.assets/image-20240819224438044.png)
+
+### 3.2 添加商户缓存
+
+* 业务流程
+
+  ![image-20240825085203841](images/readme.assets/image-20240825085203841.png)
+
+* controller
+
+  ```java
+      /**
+       * 根据id查询商铺信息
+       * @param id 商铺id
+       * @return 商铺详情数据
+       */
+      @GetMapping("/{id}")
+      public Result queryShopById(@PathVariable("id") Long id) {
+          return shopService.queryById(id);
+      }
+  ```
+
+* service
+
+```java
+ Result queryById(Long id);
+
+ @Override
+    public Result queryById(Long id) {
+        String shopKey = CACHE_SHOP_KEY+ id;
+
+        // 1. 从redis中查询店铺缓存
+        String shopJson = stringRedisTemplate.opsForValue().get(shopKey);
+
+        //2.判断是否命中缓存
+        if(StrUtil.isNotBlank(shopJson )){
+            // 3.若命中则返回信息
+            Shop shop = JSONUtil.toBean(shopJson, Shop.class);
+            return Result.ok(shop);
+        }
+        //4.没有命中缓存，查数据库
+        Shop shop = super.getById(id);
+        //5. 数据库为空，返回错误
+        if (shop == null){
+            return Result.fail("没有该商户信息");
+        }
+        //6. 数据库不为空，返回查询的结果并加入缓存
+        stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY+ id, JSONUtil.toJsonStr(shop));
+        return Result.ok(shop);
+    }
+```
+
