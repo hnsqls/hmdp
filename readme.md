@@ -1759,3 +1759,177 @@ isNotBlank情况如下![image-20240829194852255](images/readme.assets/image-2024
 * 利用Redis集群提高服务的可用性
 * 给缓存业务添加降级限流策略
 * 给业务添加多级缓存
+
+
+
+### 3.9缓存击穿问题
+
+缓存击穿问题也叫热点Key问题，就是一个被高并发访问并且缓存重建业务较复杂的key突然失效了，无数的请求访问会在瞬间给数据库带来巨大的冲击。
+
+逻辑分析：假设线程1在查询缓存之后，本来应该去查询数据库，然后把这个数据重新加载到缓存的，此时只要线程1走完这个逻辑，其他线程就都能从缓存中加载这些数据了，但是假设在线程1没有走完的时候，后续的线程2，线程3，线程4同时过来访问当前这个方法， 那么这些线程都不能从缓存中查询到数据，那么他们就会同一时刻来访问查询缓存，都没查到，接着同一时间去访问数据库，同时的去执行数据库代码，对数据库访问压力过大
+
+![image-20240829204656245](images/readme.assets/image-20240829204656245.png)
+
+常见的解决方案有两种：
+
+* 互斥锁
+* 逻辑过期
+
+
+
+第一种解决方案:
+
+因为锁能实现互斥性。假设线程过来，只能一个人一个人的来访问数据库，从而避免对于数据库访问压力过大，但这也会影响查询的性能，因为此时会让查询的性能从并行变成了串行，我们可以采用tryLock方法 + double check来解决这样的问题。
+
+
+
+假设现在线程1过来访问，他查询缓存没有命中，但是此时他获得到了锁的资源，那么线程1就会一个人去执行逻辑，假设现在线程2过来，线程2在执行过程中，并没有获得到锁，那么线程2就可以进行到休眠，直到线程1把锁释放后，线程2获得到锁，然后再来执行逻辑，此时就能够从缓存中拿到数据了。
+
+![image-20240829204843703](images/readme.assets/image-20240829204843703.png)
+
+解决方案二、逻辑过期方案
+
+方案分析：我们之所以会出现这个缓存击穿问题，主要原因是在于我们对key设置了过期时间，假设我们不设置过期时间，其实就不会有缓存击穿的问题，但是不设置过期时间，这样数据不就一直占用我们内存了吗，我们可以采用逻辑过期方案。
+
+我们把过期时间设置在 redis的value中，注意：这个过期时间并不会直接作用于redis，而是我们后续通过逻辑去处理。假设线程1去查询缓存，然后从value中判断出来当前的数据已经过期了，此时线程1去获得互斥锁，那么其他线程会进行阻塞，获得了锁的线程他会开启一个 线程去进行 以前的重构数据的逻辑，直到新开的线程完成这个逻辑后，才释放锁， 而线程1直接进行返回，假设现在线程3过来访问，由于线程线程2持有着锁，所以线程3无法获得锁，线程3也直接返回数据，只有等到新开的线程2把重建数据构建完后，其他线程才能走返回正确的数据。
+
+这种方案巧妙在于，异步的构建缓存，缺点在于在构建完缓存之前，返回的都是脏数据。
+
+![image-20240829211004904](images/readme.assets/image-20240829211004904.png)
+
+进行对比
+
+**互斥锁方案：**由于保证了互斥性，所以数据一致，且实现简单，因为仅仅只需要加一把锁而已，也没其他的事情需要操心，所以没有额外的内存消耗，缺点在于有锁就有死锁问题的发生，且只能串行执行性能肯定受到影响
+
+**逻辑过期方案：** 线程读取过程中不需要等待，性能好，有一个额外的线程持有锁去进行重构数据，但是在重构数据完成前，其他的线程只能返回之前的数据，且实现起来麻烦
+
+### 3.9.1互斥锁解决缓存击问题
+
+解决根据id获取商户信息缓存击穿问题。
+
+业务流程分析
+
+![image-20240829212828440](images/readme.assets/image-20240829212828440.png)
+
+代码
+
+在shopserviceImp 下新增
+
+```java
+    /**
+     * 获取锁
+     * @param key
+     * @return
+     */
+    private boolean tryLock(String key){
+        Boolean flag = stringRedisTemplate.opsForValue().setIfAbsent(key, "1", 10, TimeUnit.SECONDS);
+        return BooleanUtil.isTrue(flag);
+
+    }
+
+    /**
+     * 释放锁
+     * @param key
+     */
+    private  void unlock(String key){
+        stringRedisTemplate.delete(key);
+    }
+```
+
+
+
+互斥锁解决缓存击穿问题
+
+```java
+ /**
+     * 查询商户信息 缓存击穿
+     * @param id
+     * @return
+     */
+    public Shop queryWithMutex(Long id){
+        String shopKey = CACHE_SHOP_KEY+ id;
+
+        // 1. 从redis中查询店铺缓存
+        String shopJson = stringRedisTemplate.opsForValue().get(shopKey);
+
+        //2.判断是否命中缓存  isnotblank false: "" or "/t/n" or "null"
+        if(StrUtil.isNotBlank(shopJson)){
+            // 3.若命中则返回信息
+            Shop shop = JSONUtil.toBean(shopJson, Shop.class);
+            return shop;
+        }
+        //数据穿透判空   不是null 就是空串 ""
+        if (shopJson != null){
+            //返回错误信息
+//            return  Result.fail("没有该商户信息（缓存）");
+            return null;
+        }
+        //4.没有命中缓存，查数据库
+        //todo :解决缓存击穿  不能直接查数据库。 利用互斥锁解决
+
+        /**
+         * 实现缓存重建
+         * 1. 获取互斥锁
+         * 2. 判断是否成功
+         * 3. 失败就休眠重试
+         * 4.成功 查数据库
+         * 5 数据库存在该数据写入缓存
+         * 6 不存在返回错误信息并写入缓存“”
+         * 7 释放锁
+         *
+         */
+
+        //获取互斥锁 失败  休眠重试
+        String lockKey = "lock:shop" + id;
+        Shop shop = null;
+        try {
+            if (!tryLock(lockKey)) {
+
+                Thread.sleep(50);
+                return queryWithMutex(id);//递归 重试
+            }
+
+            //获得锁
+            // 查数据库
+            shop = super.getById(id);
+            Thread.sleep(200);//模拟你测试环境 热点key失效模拟重建延迟
+            if (shop == null){
+                stringRedisTemplate.opsForValue().set(shopKey,"",CACHE_NULL_TTL,TimeUnit.SECONDS);
+                //            return Result.fail("没有该商户信息");
+                return null;
+            }
+            stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY+ id, JSONUtil.toJsonStr(shop),CACHE_SHOP_TTL, TimeUnit.MINUTES);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } finally {
+            unlock(shopKey);
+        }
+        return shop;
+
+    }
+```
+
+查询商户信息接口
+
+```java
+ /**
+     * 查询商户信息
+     * @param id
+     * @return
+     */
+    @Override
+    public Result queryById(Long id) {
+        // 缓存穿透
+//        Shop shop = queryWithPassThrough(id);
+
+        //互斥锁解决缓存击穿
+        Shop shop = queryWithMutex(id);
+        if (shop ==null){
+            return Result.fail("店铺不存在");
+        }
+
+
+        return Result.ok(shop);
+    }
+```
+
