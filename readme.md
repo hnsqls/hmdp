@@ -2484,3 +2484,238 @@ boolean success = seckillVoucherService.update()
 
 
 
+### 4.5 一人一单秒杀下单
+
+需求：修改秒杀业务，要求同一个优惠券，一个用户只能下一单
+
+业务流程
+
+![image-20240830164453729](images/readme.assets/image-20240830164453729.png)
+
+```java
+   /**
+     * 秒杀优惠卷下单
+     *
+     * @param voucherId
+     * @return
+     */
+    @Override
+    //两表开启事务
+    @Transactional
+    public Result seckillVoucher(Long voucherId) {
+        SeckillVoucher seckillVoucher = seckillVoucherService.getById(voucherId);
+        LocalDateTime beginTime = seckillVoucher.getBeginTime();
+        LocalDateTime endTime = seckillVoucher.getEndTime();
+        LocalDateTime now = LocalDateTime.now();
+        //下单时间，不在优惠卷使用时间
+        if (beginTime.isAfter(now)) {
+            return Result.fail("秒杀还未开始");
+        }
+        if (endTime.isBefore(now)) {
+            return Result.fail("秒杀已经结束");
+        }
+        //判断库存是否充足---》
+        int stock = seckillVoucher.getStock();
+
+        if (stock <= 0) {
+            return Result.fail("库存不足");
+        }
+        /**下单库存减一 解决超卖问题使用乐观锁,
+         * 但是以上这种方式通过测试发现会有很多失败的情况，
+         * 失败的原因在于：在使用乐观锁过程中假设100个线程同时都拿到了100的库存，
+         * 然后大家一起去进行扣减，但是100个人中只有1个人能扣减成功，
+         * 其他的人在处理时，他们在扣减时，库存已经被修改过了，
+         * 所以此时其他线程都会失败.
+         */
+//        boolean success = seckillVoucherService.update().
+//                setSql("stock = stock - 1")
+//                .eq("voucher_id", voucherId)
+//                .eq("stock",stock)
+//                .update();
+
+
+        //todo : 一人一单的判断
+
+        int count = seckillVoucherService.query()
+                .eq("user_id", UserHolder.getUser().getId())
+                .eq("voucher_id", voucherId)
+                .count();
+
+        if (count > 0 ){
+            return Result.fail("用户已经达到购买上限");
+        }
+
+
+        //更新数据库 下单
+
+        /**
+         * 乐观锁的改造
+         */
+        boolean success = seckillVoucherService.update().
+                setSql("stock = stock - 1")
+                .eq("voucher_id", voucherId)
+                .gt("stock", 0)
+                .update();
+        if (!success) {
+            return Result.fail("库存不足");
+        }
+        //创建订单
+        VoucherOrder voucherOrder = new VoucherOrder();
+        long nextId = redisIdWorker.nextId("order");
+
+        voucherOrder.setId(nextId);
+        voucherOrder.setUserId(UserHolder.getUser().getId());
+        voucherOrder.setVoucherId(voucherId);
+
+        voucherOrderService.save(voucherOrder);
+
+        return Result.ok(nextId);
+    }
+}
+
+```
+
+结果测试，发现还是下了多单
+
+分析： 有多个线程同时进入一人一单的判断，加入10个线程同时进入了一人一单的判断，这10个线程都是正数据库查的数据都是没有下过单，然后这10个线程就下单了，怎么解决呢？乐观锁？不可以，乐观锁的核心判断之前的数据是否有修改。这个只是查询、怎么办呢？使用锁
+
+
+
+```java
+/**
+     * 秒杀优惠卷下单
+     *
+     * @param voucherId
+     * @return
+     */
+    @Override
+    //两表开启事务
+    public Result seckillVoucher(Long voucherId) {
+        SeckillVoucher seckillVoucher = seckillVoucherService.getById(voucherId);
+        LocalDateTime beginTime = seckillVoucher.getBeginTime();
+        LocalDateTime endTime = seckillVoucher.getEndTime();
+        LocalDateTime now = LocalDateTime.now();
+        //下单时间，不在优惠卷使用时间
+        if (beginTime.isAfter(now)) {
+            return Result.fail("秒杀还未开始");
+        }
+        if (endTime.isBefore(now)) {
+            return Result.fail("秒杀已经结束");
+        }
+        //判断库存是否充足---》
+        int stock = seckillVoucher.getStock();
+
+        if (stock <= 0) {
+            return Result.fail("库存不足");
+        }
+        /**下单库存减一 解决超卖问题使用乐观锁,
+         * 但是以上这种方式通过测试发现会有很多失败的情况，
+         * 失败的原因在于：在使用乐观锁过程中假设100个线程同时都拿到了100的库存，
+         * 然后大家一起去进行扣减，但是100个人中只有1个人能扣减成功，
+         * 其他的人在处理时，他们在扣减时，库存已经被修改过了，
+         * 所以此时其他线程都会失败.
+         */
+//        boolean success = seckillVoucherService.update().
+//                setSql("stock = stock - 1")
+//                .eq("voucher_id", voucherId)
+//                .eq("stock",stock)
+//                .update();
+
+        synchronized (UserHolder.getUser().getId().toString().intern()){
+            //解决事务不生效问题原因就是下面的方法是this.而不是sprig代理的方法
+            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
+        }
+
+    }
+
+
+
+    @Transactional
+    public  Result createVoucherOrder(Long voucherId) {
+//        synchronized (UserHolder.getUser().getId().toString().intern()) { 此处加锁，是先释放锁在提交事务，假如还未提交又有新的进程进来就有问题
+
+            //todo : 一人一单的判断
+            int count = seckillVoucherService.query()
+                    .eq("user_id", UserHolder.getUser().getId())
+                    .eq("voucher_id", voucherId)
+                    .count();
+
+            if (count > 0) {
+                return Result.fail("用户已经达到购买上限");
+            }
+
+
+            //更新数据库 下单
+
+            /**
+             * 乐观锁的改造
+             */
+            boolean success = seckillVoucherService.update().
+                    setSql("stock = stock - 1")
+                    .eq("voucher_id", voucherId)
+                    .gt("stock", 0)
+                    .update();
+            if (!success) {
+                return Result.fail("库存不足");
+            }
+            //创建订单
+            VoucherOrder voucherOrder = new VoucherOrder();
+            long nextId = redisIdWorker.nextId("order");
+
+            voucherOrder.setId(nextId);
+            voucherOrder.setUserId(UserHolder.getUser().getId());
+            voucherOrder.setVoucherId(voucherId);
+
+            voucherOrderService.save(voucherOrder);
+
+            return Result.ok(nextId);
+        }
+//    }
+}
+```
+
+使用AOP
+
+```xml
+   <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+        </dependency>
+```
+
+启动类
+
+```java
+@EnableAspectJAutoProxy(exposeProxy = true)
+```
+
+需要注意的点
+
+1. 事务注解不生效问题，@Transactional,是spring提功能的注解，但是我们在同个类方法调用的时候是this调用而不是代理spring代理调用，所以在使用该方法时要使用代理
+
+   ```java
+   //解决事务不生效问题原因就是下面的方法是this.而不是sprig代理的方法
+               IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+               return proxy.createVoucherOrder(voucherId);
+   ```
+
+2. synchronized 的范围，越小越好.
+
+   为什么不能所在方法里而是方法外，因为如果所在方法里，方法执行万，就解锁，然年提交事务，但是在提交事务的过程中，锁已经释放，其他线程查询数据库，就会得到老的数据。
+
+   所以逻辑应该时方法完成后，事务提交，释放锁
+
+3. 锁对象的选择
+
+   一人一单，应该以用户id为锁对象，是比较合理的。
+
+   需要注意的是
+
+   ` synchronized (UserHolder.getUser().getId().toString().intern())`
+
+   `   Long id = UserHolder.getUser().getId();`Long是包装类，即使用户id相同但是Long不同
+
+   所以用intern()
+
+   `intern()`是`String`类的一个方法，它的作用是检查字符串常量池中是否存在等于此`String`对象的字符串；如果存在，则返回代表池中这个字符串的`String`对象的引用；如果不存在，则将此`String`对象包含的字符串添加到池中，并返回此`String`对象的引用。简而言之，`intern()`方法用于确保所有相等的字符串字面量都引用同一个`String`对象。

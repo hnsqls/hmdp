@@ -9,6 +9,7 @@ import com.hmdp.service.IVoucherOrderService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.RedisIdWorker;
 import com.hmdp.utils.UserHolder;
+import org.springframework.aop.framework.AopContext;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,7 +42,6 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
      */
     @Override
     //两表开启事务
-    @Transactional
     public Result seckillVoucher(Long voucherId) {
         SeckillVoucher seckillVoucher = seckillVoucherService.getById(voucherId);
         LocalDateTime beginTime = seckillVoucher.getBeginTime();
@@ -73,28 +73,56 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 //                .eq("stock",stock)
 //                .update();
 
-
-        /**
-         * 乐观锁的改造
-         */
-        boolean success = seckillVoucherService.update().
-                setSql("stock = stock - 1")
-                .eq("voucher_id", voucherId)
-                .gt("stock", 0)
-                .update();
-        if (!success) {
-            return Result.fail("库存不足");
+//        Long id = UserHolder.getUser().getId();
+        synchronized (UserHolder.getUser().getId().toString().intern()){
+            //解决事务不生效问题原因就是下面的方法是this.而不是sprig代理的方法
+            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
         }
-        //创建订单
-        VoucherOrder voucherOrder = new VoucherOrder();
-        long nextId = redisIdWorker.nextId("order");
 
-        voucherOrder.setId(nextId);
-        voucherOrder.setUserId(UserHolder.getUser().getId());
-        voucherOrder.setVoucherId(voucherId);
-
-        voucherOrderService.save(voucherOrder);
-
-        return Result.ok(nextId);
     }
+
+
+
+    @Transactional
+    public  Result createVoucherOrder(Long voucherId) {
+//        synchronized (UserHolder.getUser().getId().toString().intern()) { 此处加锁，是先释放锁在提交事务，假如还未提交又有新的进程进来就有问题
+
+            //todo : 一人一单的判断
+            int count = seckillVoucherService.query()
+                    .eq("user_id", UserHolder.getUser().getId())
+                    .eq("voucher_id", voucherId)
+                    .count();
+
+            if (count > 0) {
+                return Result.fail("用户已经达到购买上限");
+            }
+
+
+            //更新数据库 下单
+
+            /**
+             * 乐观锁的改造
+             */
+            boolean success = seckillVoucherService.update().
+                    setSql("stock = stock - 1")
+                    .eq("voucher_id", voucherId)
+                    .gt("stock", 0)
+                    .update();
+            if (!success) {
+                return Result.fail("库存不足");
+            }
+            //创建订单
+            VoucherOrder voucherOrder = new VoucherOrder();
+            long nextId = redisIdWorker.nextId("order");
+
+            voucherOrder.setId(nextId);
+            voucherOrder.setUserId(UserHolder.getUser().getId());
+            voucherOrder.setVoucherId(voucherId);
+
+            voucherOrderService.save(voucherOrder);
+
+            return Result.ok(nextId);
+        }
+//    }
 }
