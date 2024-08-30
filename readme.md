@@ -2050,3 +2050,113 @@ public class RedisData {
     }
 ```
 
+
+
+### 3.10 封装Redis工具类
+
+缓存穿透缓存击穿问题提取成工具类更容易复用
+
+要明确需要解决的事情
+
+* 方法1：将任意Java对象序列化为json并存储在string类型的key中，并且可以设置TTL过期时间
+* 方法2：将任意Java对象序列化为json并存储在string类型的key中，并且可以设置逻辑过期时间，用于处理缓
+
+存击穿问题
+
+* 方法3：根据指定的key查询缓存，并反序列化为指定类型，利用缓存空值的方式解决缓存穿透问题
+* 方法4：根据指定的key查询缓存，并反序列化为指定类型，需要利用逻辑过期解决缓存击穿问题
+
+
+
+创建重聚类  CacheClient
+
+```java
+/**
+ * Redis 工具类
+ * * 方法1：将任意Java对象序列化为json并存储在string类型的key中，并且可以设置TTL过期时间
+ * * 方法2：将任意Java对象序列化为json并存储在string类型的key中，并且可以设置逻辑过期时间，用于处理缓存击穿问题
+ *
+ * * 方法3：根据指定的key查询缓存，并反序列化为指定类型，利用缓存空值的方式解决缓存穿透问题
+ * * 方法4：根据指定的key查询缓存，并反序列化为指定类型，需要利用逻辑过期解决缓存击穿问题
+ */
+@Component
+public class CacheClient {
+
+    private  final StringRedisTemplate stringRedisTemplate;
+
+    public CacheClient(StringRedisTemplate stringRedisTemplate) {
+        this.stringRedisTemplate = stringRedisTemplate;
+    }
+
+    /**
+     * 方法1：将任意Java对象序列化为json并存储在string类型的key中，并且可以设置TTL过期时间
+     * @param key
+     * @param value
+     * @param time
+     * @param unit
+     */
+    public void set(String key , Object value, Long time, TimeUnit unit){
+        stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(value), time,unit);
+    }
+
+
+    /**
+     * 方法2：将任意Java对象序列化为json并存储在string类型的key中，并且可以设置逻辑过期时间，用于处理缓存击穿问题
+     * @param key
+     * @param value
+     * @param time
+     * @param unit
+     */
+    public void setWithLogicalExpire(String key , Object value, Long time, TimeUnit unit){
+
+        //RedisData 是自定义类
+        RedisData redisData = new RedisData();
+        redisData.setData(value);
+        redisData.setExpireTime(LocalDateTime.now().plusSeconds(unit.toSeconds(time)));
+        stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(redisData));
+    }
+
+
+    /**
+     *  * * 方法3：根据指定的key查询缓存，并反序列化为指定类型，利用缓存空值的方式解决缓存穿透问题
+     * @param prefix
+     * @param id
+     * @return
+     */
+    public <R,ID> R getWithPassThrough(String keyPrefix, ID id, Class<R> type, Function<ID,R> dbFallback,Long time,TimeUnit unit){
+        String key = keyPrefix+ id;
+
+        // 1. 从redis中查询店铺缓存
+        String json = stringRedisTemplate.opsForValue().get(key);
+
+        //2.判断是否命中缓存  isnotblank false: "" or "/t/n" or "null"
+        if(StrUtil.isNotBlank(json)){
+            // 3.若命中则返回信息
+            R r = JSONUtil.toBean(json, type);
+            return r;
+        }
+        //数据穿透判空   不是null 就是空串 ""
+        if (json != null){
+            //返回错误信息
+//            return  Result.fail("没有该商户信息（缓存）");
+            return null;
+        }
+        //4.没有命中缓存，查数据库
+        //todo :解决缓存击穿  不能直接查数据库。 利用互斥锁解决
+//       R r= getById(id); 交给调用者--》》函数式编程
+        R r = dbFallback.apply(id);
+        //5. 数据库为空，返回错误---》解决缓存穿透--》加入redis为空
+        if (r == null){
+            stringRedisTemplate.opsForValue().set(key,"",CACHE_NULL_TTL,TimeUnit.MINUTES);
+//            return Result.fail("没有该商户信息");
+            return null;
+        }
+
+        //6. 数据库不为空，返回查询的结果并加入缓存
+        stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(r),time, unit);
+        return r;
+    }
+}
+
+```
+
