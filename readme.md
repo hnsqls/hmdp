@@ -2321,5 +2321,83 @@ tb_seckill_voucher：优惠券的库存、开始抢购时间，结束抢购时�
 
 *    @Transactional 原子操作
 
+### 4.3秒杀下单
 
+业务分析：
+
+​	客户端请求下单（id），判断是否在秒杀时间内下单，不是就返回错误，是就判断是否有库存，没有库存返回错误，有库存就创建订单，并修改库存。
+
+
+
+![image-20240830150402017](images/readme.assets/image-20240830150402017.png)
+
+接口
+
+controller
+
+```java
+@RestController
+@RequestMapping("/voucher-order")
+public class VoucherOrderController {
+
+    @Resource
+    private IVoucherOrderService voucherOrderService;
+    @PostMapping("seckill/{id}")
+    public Result seckillVoucher(@PathVariable("id") Long voucherId) {
+        return voucherOrderService.seckillVoucher(voucherId);
+    }
+}
+
+```
+
+实现
+
+```java
+    /**
+     * 秒杀优惠卷下单
+     * @param voucherId
+     * @return
+     */
+    @Override
+    //两表开启事务
+    @Transactional
+    public Result seckillVoucher(Long voucherId) {
+        SeckillVoucher seckillVoucher = seckillVoucherService.getById(voucherId);
+        LocalDateTime beginTime = seckillVoucher.getBeginTime();
+        LocalDateTime endTime = seckillVoucher.getEndTime();
+        LocalDateTime now = LocalDateTime.now();
+        //下单时间，不在优惠卷使用时间
+        if (beginTime.isAfter(now)){
+            return Result.fail("秒杀还未开始");
+        }
+        if (endTime.isBefore(now)){
+            return Result.fail("秒杀已经结束");
+        }
+        //判断库存是否充足
+        int stock = seckillVoucher.getStock();
+        if (stock <=0){
+            return Result.fail("库存不足");
+        }
+        //下单库存减一
+        boolean success = seckillVoucherService.update().
+                setSql("stock = stock - 1")
+                .eq("voucher_id", voucherId)
+                .update();
+
+        if (!success){
+            return Result.fail("库存不足");
+        }
+        //创建订单
+        VoucherOrder voucherOrder = new VoucherOrder();
+        long nextId = redisIdWorker.nextId("order");
+
+        voucherOrder.setId(nextId);
+        voucherOrder.setUserId(UserHolder.getUser().getId());
+        voucherOrder.setVoucherId(voucherId);
+
+        voucherOrderService.save(voucherOrder);
+
+        return Result.ok(nextId);
+    }
+```
 
