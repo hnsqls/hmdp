@@ -33,9 +33,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     private RedisIdWorker redisIdWorker;
 
 
-
     /**
      * 秒杀优惠卷下单
+     *
      * @param voucherId
      * @return
      */
@@ -48,24 +48,41 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         LocalDateTime endTime = seckillVoucher.getEndTime();
         LocalDateTime now = LocalDateTime.now();
         //下单时间，不在优惠卷使用时间
-        if (beginTime.isAfter(now)){
+        if (beginTime.isAfter(now)) {
             return Result.fail("秒杀还未开始");
         }
-        if (endTime.isBefore(now)){
+        if (endTime.isBefore(now)) {
             return Result.fail("秒杀已经结束");
         }
-        //判断库存是否充足
+        //判断库存是否充足---》
         int stock = seckillVoucher.getStock();
-        if (stock <=0){
+
+        if (stock <= 0) {
             return Result.fail("库存不足");
         }
-        //下单库存减一
+        /**下单库存减一 解决超卖问题使用乐观锁,
+         * 但是以上这种方式通过测试发现会有很多失败的情况，
+         * 失败的原因在于：在使用乐观锁过程中假设100个线程同时都拿到了100的库存，
+         * 然后大家一起去进行扣减，但是100个人中只有1个人能扣减成功，
+         * 其他的人在处理时，他们在扣减时，库存已经被修改过了，
+         * 所以此时其他线程都会失败.
+         */
+//        boolean success = seckillVoucherService.update().
+//                setSql("stock = stock - 1")
+//                .eq("voucher_id", voucherId)
+//                .eq("stock",stock)
+//                .update();
+
+
+        /**
+         * 乐观锁的改造
+         */
         boolean success = seckillVoucherService.update().
                 setSql("stock = stock - 1")
                 .eq("voucher_id", voucherId)
+                .gt("stock", 0)
                 .update();
-
-        if (!success){
+        if (!success) {
             return Result.fail("库存不足");
         }
         //创建订单

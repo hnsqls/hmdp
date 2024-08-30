@@ -2401,3 +2401,86 @@ public class VoucherOrderController {
     }
 ```
 
+
+
+### 4.4 库存超卖分析
+
+代码中
+
+```java
+ if (voucher.getStock() < 1) {
+        // 库存不足
+        return Result.fail("库存不足！");
+    }
+    //5，扣减库存
+    boolean success = seckillVoucherService.update()
+            .setSql("stock= stock -1")
+            .eq("voucher_id", voucherId).update();
+    if (!success) {
+        //扣减库存
+        return Result.fail("库存不足！");
+    }
+```
+
+假设线程1过来查询库存，判断出来库存大于1，正准备去扣减库存，但是还没有来得及去扣减，此时线程2过来，线程2也去查询库存，发现这个数量一定也大于1，那么这两个线程都会去扣减库存，最终多个线程相当于一起去扣减库存，此时就会出现库存的超卖问题
+
+![image-20240830160750353](images/readme.assets/image-20240830160750353.png)
+
+超卖问题是典型的多线程安全问题，针对这一问题的常见解决方案就是加锁：而对于加锁，我们通常有两种解决方案：见下图：![image-20240830160813728](images/readme.assets/image-20240830160813728.png)
+
+**悲观锁：**
+
+ 悲观锁可以实现对于数据的串行化执行，比如syn，和lock都是悲观锁的代表，同时，悲观锁中又可以再细分为公平锁，非公平锁，可重入锁，等等。
+
+**乐观锁：**
+
+  乐观锁：会有一个版本号，每次操作数据会对版本号+1，再提交回数据时，会去校验是否比之前的版本大1 ，如果大1 ，则进行操作成功，这套机制的核心逻辑在于，如果在操作过程中，版本号只比原来大1 ，那么就意味着操作过程中没有人对他进行过修改，他的操作就是安全的，如果不大1，则数据被修改过，当然乐观锁还有一些变种的处理方式比如cas
+
+  乐观锁的典型代表：就是cas，利用cas进行无锁化机制加锁，var5 是操作前读取的内存值，while中的var1+var2 是预估值，如果预估值 == 内存值，则代表中间没有被人修改过，此时就将新值去替换 内存值
+
+  其中do while 是为了在操作失败时，再次进行自旋操作，即把之前的逻辑再操作一次。
+
+```java
+int var5;
+do {
+    var5 = this.getIntVolatile(var1, var2);
+} while(!this.compareAndSwapInt(var1, var2, var5, var5 + var4));
+
+return var5;
+```
+
+**课程中的使用方式：**
+
+课程中的使用方式是没有像cas一样带自旋的操作，也没有对version的版本号+1 ，他的操作逻辑是在操作时，对版本号进行+1 操作，然后要求version 如果是1 的情况下，才能操作，那么第一个线程在操作后，数据库中的version变成了2，但是他自己满足version=1 ，所以没有问题，此时线程2执行，线程2 最后也需要加上条件version =1 ，但是现在由于线程1已经操作过了，所以线程2，操作时就不满足version=1 的条件了，所以线程2无法执行成功
+
+![image-20240830161129518](images/readme.assets/image-20240830161129518.png)
+
+我们可以不适用版本号，因为可以使用stock字段来判断，操作某次数据库中是否有其他人操作数据库。
+
+
+
+**修改代码方案一、**
+
+VoucherOrderServiceImpl 在扣减库存时，改为：
+
+```java
+boolean success = seckillVoucherService.update()
+            .setSql("stock= stock -1") //set stock = stock -1
+            .eq("voucher_id", voucherId).eq("stock",voucher.getStock()).update(); //where id = ？ and stock = ?
+```
+
+含义是：只要我扣减库存时的库存和之前我查询到的库存是一样的，就意味着没有人在中间修改过库存，那么此时就是安全的，但是以上这种方式通过测试发现会有很多失败的情况，失败的原因在于：在使用乐观锁过程中假设100个线程同时都拿到了100的库存，然后大家一起去进行扣减，但是100个人中只有1个人能扣减成功，其他的人在处理时，他们在扣减时，库存已经被修改过了，所以此时其他线程都会失败.
+
+**修改代码方案二、**
+
+之前的方式要修改前后都保持一致，但是这样我们分析过，成功的概率太低，所以我们的乐观锁需要变一下，改成stock大于0 即可
+
+```java
+boolean success = seckillVoucherService.update()
+            .setSql("stock= stock -1")
+            .eq("voucher_id", voucherId)
+    .update().gt("stock",0); //where id = ? and stock > 0
+```
+
+
+
