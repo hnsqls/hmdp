@@ -2160,3 +2160,100 @@ public class CacheClient {
 
 ```
 
+## 4 优惠卷秒杀
+
+### 4.1 全局唯一id生成器
+
+![image-20240830103827222](images/readme.assets/image-20240830103827222.png)
+
+当用户抢购时，就会生成订单并保存到tb_voucher_order这张表中，而订单表如果使用数据库自增ID就存在一些问题：
+
+![image-20240830103919013](images/readme.assets/image-20240830103919013.png)
+
+* id的规律性太明显
+* 受单表数据量的限制
+
+场景分析：如果我们的id具有太明显的规则，用户或者说商业对手很容易猜测出来我们的一些敏感信息，比如商城在一天时间内，卖出了多少单，这明显不合适。
+
+场景分析二：随着我们商城规模越来越大，mysql的单表的容量不宜超过500W，数据量过大之后，我们要进行拆库拆表，但拆分表了之后，他们从逻辑上讲他们是同一张表，所以他们的id是不能一样的， 于是乎我们需要保证id的唯一性。
+
+为了增加ID的安全性，我们可以不直接使用Redis自增的数值，而是拼接一些其它信息：
+
+
+
+![image-20240830104031366](images/readme.assets/image-20240830104031366.png)
+
+成部分：符号位：1bit，永远为0
+
+时间戳：31bit，以秒为单位，可以使用69年
+
+序列号：32bit，秒内的计数器，支持每秒产生2^32个不同ID
+
+
+
+序列号：需要注意的是，redis的自定是64位，但是只能存下32位
+
+所以我们不能只使用一个key，然后一直让他自增，可能会超过上限
+
+我们通常使用天来拼接key，一天一个key，这样不仅解决了超上限的问题，也方便统计
+
+
+
+写成工具类
+
+```java
+/**
+ * 生成全局唯一id
+ *
+ */
+@Component
+public class RedisIdWorker {
+    //初始时间戳
+    private  static final long BEGIN_TIMESTAMP = 1722470400L;
+
+    /**
+     * 序列号的位数
+     */
+
+    private static final int COUNT_BITS = 32;
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+
+    /**
+     * 创建全局唯一id
+     * @param keyPrefix
+     * @return
+     */
+    public long nextId(String keyPrefix){
+
+        //生成时间戳
+        LocalDateTime now = LocalDateTime.now();
+        long nowSecond = now.toEpochSecond(ZoneOffset.UTC);
+        long timestamp = nowSecond - BEGIN_TIMESTAMP;
+
+        //生成序列号
+        String date = now.format(DateTimeFormatter.ofPattern("yyyy:MM:dd"));
+        long count = stringRedisTemplate.opsForValue().increment("icr:" + keyPrefix + ":" + date);
+
+        //拼接并返回
+        return timestamp<<COUNT_BITS |count;
+
+    }
+
+    /**
+     * 获取初始时间 秒
+     * @param args
+     */
+//    public static void main(String[] args) {
+//        LocalDateTime localDateTime = LocalDateTime.of(2024, 8, 1, 0, 0, 0);
+//
+//        long second = localDateTime.toEpochSecond(ZoneOffset.UTC);
+//        System.out.println("second = " + second);
+//
+//
+//    }
+
+}
+
+```
+

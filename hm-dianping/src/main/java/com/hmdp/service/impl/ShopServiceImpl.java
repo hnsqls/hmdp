@@ -297,5 +297,5 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
      * 线程池
      */
     private  static  final ExecutorService CACHE_REBUILD_EXECUTOR = Executors.newFixedThreadPool(10);
-    
+
 }
