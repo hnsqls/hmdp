@@ -18,6 +18,9 @@ public class VoucherController {
     @Resource
     private IVoucherService voucherService;
 
+
+
+
     /**
      * 新增普通券
      * @param voucher 优惠券信息
@@ -28,6 +31,9 @@ public class VoucherController {
         voucherService.save(voucher);
         return Result.ok(voucher.getId());
     }
+
+
+
 
     /**
      * 新增秒杀券

@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -30,12 +31,17 @@ public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> impl
         return Result.ok(vouchers);
     }
 
+    /**
+     * 添加秒杀优惠卷
+     * @param voucher
+     */
     @Override
     @Transactional
     public void addSeckillVoucher(Voucher voucher) {
         // 保存优惠券
         save(voucher);
         // 保存秒杀信息
+
         SeckillVoucher seckillVoucher = new SeckillVoucher();
         seckillVoucher.setVoucherId(voucher.getId());
         seckillVoucher.setStock(voucher.getStock());

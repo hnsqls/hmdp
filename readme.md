@@ -2257,3 +2257,69 @@ public class RedisIdWorker {
 
 ```
 
+### 4.2 添加秒杀优惠卷
+
+数据库
+
+tb_voucher：优惠券的基本信息，优惠金额、使用规则等
+tb_seckill_voucher：优惠券的库存、开始抢购时间，结束抢购时间。特价优惠券才需要填写这些信息
+
+
+
+`VoucherController`
+
+```java
+
+ /**
+     * 新增普通券
+     * @param voucher 优惠券信息
+     * @return 优惠券id
+     */
+    @PostMapping
+    public Result addVoucher(@RequestBody Voucher voucher) {
+        voucherService.save(voucher);
+        return Result.ok(voucher.getId());
+    }
+/**
+     * 新增秒杀券
+     * @param voucher 优惠券信息，包含秒杀信息
+     * @return 优惠券id
+     */
+    @PostMapping("seckill")
+    public Result addSeckillVoucher(@RequestBody Voucher voucher) {
+        voucherService.addSeckillVoucher(voucher);
+        return Result.ok(voucher.getId());
+    }
+```
+
+添加秒杀卷的业务逻辑
+
+ 先添加正常卷，在补充秒杀字段
+
+```java
+    /**
+     * 添加秒杀优惠卷
+     * @param voucher
+     */
+    @Override
+    @Transactional
+    public void addSeckillVoucher(Voucher voucher) {
+        // 保存优惠券
+        save(voucher);
+        // 保存秒杀信息
+        
+        SeckillVoucher seckillVoucher = new SeckillVoucher();
+        seckillVoucher.setVoucherId(voucher.getId());
+        seckillVoucher.setStock(voucher.getStock());
+        seckillVoucher.setBeginTime(voucher.getBeginTime());
+        seckillVoucher.setEndTime(voucher.getEndTime());
+        seckillVoucherService.save(seckillVoucher);
+    }
+}
+
+```
+
+*    @Transactional 原子操作
+
+
+
