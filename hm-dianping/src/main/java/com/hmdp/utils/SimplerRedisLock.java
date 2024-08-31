@@ -1,5 +1,6 @@
 package com.hmdp.utils;
 
+import cn.hutool.core.lang.UUID;
 import cn.hutool.json.JSONUtil;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -16,6 +17,8 @@ public class SimplerRedisLock implements  ILock{
     //redis 中key 的前缀
     private  static  final String KEY_PREFIX ="lock:";
 
+    private  static  final String ID_PREFIX = UUID.fastUUID().toString(true);
+
     public SimplerRedisLock(StringRedisTemplate stringRedisTemplate, String name) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.name = name;
@@ -29,8 +32,9 @@ public class SimplerRedisLock implements  ILock{
     @Override
     public boolean tryLock(long timeoutSec) {
 
-        long ThreadId = Thread.currentThread().getId();
-        Boolean aBoolean = stringRedisTemplate.opsForValue().setIfAbsent(KEY_PREFIX + name, ThreadId+"", timeoutSec, TimeUnit.SECONDS);
+        //获取线程标识
+        String ThreadValue = ID_PREFIX +Thread.currentThread().getId();
+        Boolean aBoolean = stringRedisTemplate.opsForValue().setIfAbsent(KEY_PREFIX + name, ThreadValue, timeoutSec, TimeUnit.SECONDS);
 
         return Boolean.TRUE.equals(aBoolean);
     }
@@ -40,7 +44,14 @@ public class SimplerRedisLock implements  ILock{
      */
     @Override
     public void unlock() {
-        stringRedisTemplate.delete(KEY_PREFIX+name);
 
+        //判断一下是不是当钱线程的锁防止别的线程删除
+        //获取线程标识
+        String ThreadValue = ID_PREFIX +Thread.currentThread().getId();
+        //获取锁标识
+        String stringId = stringRedisTemplate.opsForValue().get(KEY_PREFIX + name);
+        if (ThreadValue.equals(stringId)) {
+            stringRedisTemplate.delete(KEY_PREFIX + name);
+        }
     }
 }

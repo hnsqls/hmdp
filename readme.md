@@ -3043,3 +3043,62 @@ public class SimplerRedisLock implements  ILock{
 
 
 
+### 5.3Redis分布式锁误删情况
+
+考虑以下下情况
+
+持有锁的线程在锁的内部出现了阻塞，导致他的锁自动释放（过期时间到了），这时其他线程，线程2来尝试获得锁，就拿到了这把锁，然后线程2在持有锁执行过程中，线程1反应过来，继续执行，而线程1执行过程中，走到了删除锁逻辑，此时就会把本应该属于线程2的锁进行删除，这就是误删别人锁的情况说明。线程3可以获取到锁，这样线程2，线程3都访问到了临界资源。
+
+解决方案：解决方案就是在每个线程释放锁的时候，去判断一下当前这把锁是否属于自己，如果属于自己，则不进行锁的删除，假设还是上边的情况，线程1卡顿，锁自动释放，线程2进入到锁的内部执行逻辑，此时线程1反应过来，然后删除锁，但是线程1，一看当前这把锁不是属于自己，于是不进行删除锁逻辑，当线程2走到删除锁逻辑时，如果没有卡过自动释放锁的时间点，则判断当前这把锁是属于自己的，于是删除这把锁。
+
+![image-20240831143222526](images/readme.assets/image-20240831143222526.png)
+
+
+
+> 怎么处理在每个线程释放锁的时候，判断一下当前这把锁是否属于自己?
+
+我们在存锁的时候存value 是线程id，那么解锁的时候，只需要判断当前线程和redis中取出的value是否一直不就可以了。
+
+其实在单体项目是可以的，但是在集群模式下不可以，原因是线程的id是由jvm来自增管理的，每个集群都有自己的jvm。所以可能会出现，在不同服务下线程id可能相等的情况。这样也会导致删除。
+
+所以我们不能使用线程id来标识，我们使用UUID来生成 + id拼接\
+
+获取锁和释放锁方法
+
+```java
+private  static  final String ID_PREFIX = UUID.fastUUID().toString(true);
+  
+/**
+     * 获取锁
+     * @param timeoutSec
+     * @return
+     */
+    @Override
+    public boolean tryLock(long timeoutSec) {
+
+        //获取线程标识
+        String ThreadValue = ID_PREFIX +Thread.currentThread().getId();
+        Boolean aBoolean = stringRedisTemplate.opsForValue().setIfAbsent(KEY_PREFIX + name, ThreadValue, timeoutSec, TimeUnit.SECONDS);
+
+        return Boolean.TRUE.equals(aBoolean);
+    }
+
+    /**
+     * 释放锁
+     */
+    @Override
+    public void unlock() {
+
+        //判断一下是不是当钱线程的锁防止别的线程删除
+        //获取线程标识
+        String ThreadValue = ID_PREFIX +Thread.currentThread().getId();
+        //获取锁标识
+        String stringId = stringRedisTemplate.opsForValue().get(KEY_PREFIX + name);
+        if (ThreadValue.equals(stringId)) {
+            stringRedisTemplate.delete(KEY_PREFIX + name);
+        }
+    }
+}
+
+```
+
