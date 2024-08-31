@@ -3207,3 +3207,61 @@ return 0
 
 ```
 
+
+
+## 6.redission
+
+什么是Redission呢
+
+Redisson是一个在Redis的基础上实现的Java驻内存数据网格（In-Memory Data Grid）。它不仅提供了一**系列的分布式的Java常用对象，还提供了许多分布式服务，其中就包含了各种分布式锁的实现**。
+
+![image-20240831220438176](images/readme.assets/image-20240831220438176.png)
+
+### 6.1 redission-分布式锁
+
+[8. 分布式锁和同步器 · redisson/redisson Wiki (github.com)](https://github.com/redisson/redisson/wiki/8.-分布式锁和同步器)
+
+基于setnx实现的分布式锁存在下面的问题：
+
+**重入问题**：重入问题是指 获得锁的线程可以再次进入到相同的锁的代码块中，可重入锁的意义在于防止死锁，比如HashTable这样的代码中，他的方法都是使用synchronized修饰的，假如他在一个方法内，调用另一个方法，那么此时如果是不可重入的，不就死锁了吗？所以可重入锁他的主要意义是防止死锁，我们的synchronized和Lock锁都是可重入的。
+
+**不可重试**：是指目前的分布式只能尝试一次，我们认为合理的情况是：当线程在获得锁失败后，他应该能再次尝试获得锁。
+
+**超时释放：**我们在加锁时增加了过期时间，这样的我们可以防止死锁，但是如果卡顿的时间超长，虽然我们采用了lua表达式防止删锁的时候，误删别人的锁，但是毕竟没有锁住，有安全隐患
+
+**主从一致性：** 如果Redis提供了主从集群，当我们向集群写数据时，主机需要异步的将数据同步给从机，而万一在同步过去之前，主机宕机了，就会出现死锁问题。
+
+redission提供了分布式系统的锁
+
+> 快速使用
+
+引入依赖
+
+```xml
+   <dependency>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson</artifactId>
+            <version>3.13.6</version>
+        </dependency>
+
+```
+
+redission客户端配置
+
+```java
+@Configuration
+public class RedissonConfig {
+
+    @Bean
+    public RedissonClient redissonClient(){
+        // 配置
+        Config config = new Config();
+        config.useSingleServer().setAddress("redis://192.168.150.101:6379")
+            .setPassword("123321");
+        // 创建RedissonClient对象
+        return Redisson.create(config);
+    }
+}
+
+```
+

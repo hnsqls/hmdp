@@ -10,6 +10,8 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.RedisIdWorker;
 import com.hmdp.utils.SimplerRedisLock;
 import com.hmdp.utils.UserHolder;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.aop.framework.AopContext;
 import org.springframework.beans.BeanUtils;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -34,6 +36,12 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
     @Resource
     private RedisIdWorker redisIdWorker;
+
+    /**
+     * redission分布式锁使用
+     */
+    @Resource
+    private RedissonClient redissonClient;
 
 
 
@@ -91,11 +99,23 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
         //分布式锁 redis  锁定范围下单的用户id
 
+        // range
         //创建工具
-        SimplerRedisLock lock = new SimplerRedisLock(new StringRedisTemplate(), "order:"+UserHolder.getUser().getId());
+//         SimplerRedisLock lock = new SimplerRedisLock(new StringRedisTemplate(), "order:"+UserHolder.getUser().getId());
+        //尝试获取锁
+//        boolean isLock = lock.tryLock(5);//自己定义的setnx
+        // ranged
+
+        /**
+         * redission分布式锁
+         */
+
+        //获取redissionClient  获取分布式错
+        RLock lock = redissonClient.getLock("lock:order:" + UserHolder.getUser().getId());
 
         //尝试获取锁
-        boolean isLock = lock.tryLock(5);
+        //参数说明 第一个参数long代表等待获取锁时长默认-1 第二个参数long过期时间默认30s 第三个时间单位
+        boolean isLock = lock.tryLock();
 
         if (!isLock) {
             //获取锁失败。返回错误信息
