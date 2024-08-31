@@ -2719,3 +2719,102 @@ boolean success = seckillVoucherService.update()
    所以用intern()
 
    `intern()`是`String`类的一个方法，它的作用是检查字符串常量池中是否存在等于此`String`对象的字符串；如果存在，则返回代表池中这个字符串的`String`对象的引用；如果不存在，则将此`String`对象包含的字符串添加到池中，并返回此`String`对象的引用。简而言之，`intern()`方法用于确保所有相等的字符串字面量都引用同一个`String`对象。
+
+
+
+
+
+### 4.6 集群模式下线程并发安全
+
+通过加锁可以解决在单机情况下的一人一单安全问题，但是在集群模式下就不行了。
+
+**模拟集群**
+
+
+
+
+
+![image-20240830232856943](images/readme.assets/image-20240830232856943.png)
+
+![image-20240831080321484](images/readme.assets/image-20240831080321484.png)
+
+运行两个实例，修改端口。
+
+![image-20240831080411439](images/readme.assets/image-20240831080411439.png)
+
+使用ngix做负载均衡 修改配置文件
+
+nginx/conf/nginx.conf
+
+```conf
+
+worker_processes  1;
+
+events {
+    worker_connections  1024;
+}
+
+http {
+    include       mime.types;
+    default_type  application/json;
+
+    sendfile        on;
+    
+    keepalive_timeout  65;
+
+    server {
+        listen       8080;
+        server_name  localhost;
+        # 指定前端项目所在的位置
+        location / {
+            root   html/hmdp;
+            index  index.html index.htm;
+        }
+
+        error_page   500 502 503 504  /50x.html;
+        location = /50x.html {
+            root   html;
+        }
+
+
+        location /api {  
+            default_type  application/json;
+            #internal;  
+            keepalive_timeout   30s;  
+            keepalive_requests  1000;  
+            #支持keep-alive  
+            proxy_http_version 1.1;  
+            rewrite /api(/.*) $1 break;  
+            proxy_pass_request_headers on;
+            #more_clear_input_headers Accept-Encoding;  
+            proxy_next_upstream error timeout;  
+            # proxy_pass http://127.0.0.1:8081;
+            proxy_pass http://backend;
+        }
+    }
+
+    upstream backend {
+        server 127.0.0.1:8081 max_fails=5 fail_timeout=10s weight=1;
+        server 127.0.0.1:8082 max_fails=5 fail_timeout=10s weight=1;
+    }  
+}
+
+```
+
+重新加载nginx配置文件
+
+在nginx目录下
+
+```shell
+nginx.exe -s reload
+```
+
+![image-20240831081101970](images/readme.assets/image-20240831081101970.png)
+
+同时发送下单请求会，发下并不能锁，实现一人一单
+
+是因为每个tomcat实例都运行在自己独立的jvm中，每个jvm都有管理锁的监管，所以说，这种锁，就不能实现一人一单.
+
+由于现在我们部署了多个tomcat，每个tomcat都有一个属于自己的jvm，那么假设在服务器A的tomcat内部，有两个线程，这两个线程由于使用的是同一份代码，那么他们的锁对象是同一个，是可以实现互斥的，但是如果现在是服务器B的tomcat内部，又有两个线程，但是他们的锁对象写的虽然和服务器A一样，但是锁对象却不是同一个，所以线程3和线程4可以实现互斥，但是却无法和线程1和线程2实现互斥，这就是 集群环境下，syn锁失效的原因，在这种情况下，我们就需要使用分布式锁来解决这个问题。
+
+![image-20240831093452282](images/readme.assets/image-20240831093452282.png)
