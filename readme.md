@@ -3102,3 +3102,108 @@ private  static  final String ID_PREFIX = UUID.fastUUID().toString(true);
 
 ```
 
+### 5.4 分布式锁改造（保证原子性）
+
+考虑一下情况
+
+线程1现在持有锁之后，在执行业务逻辑过程中，他正准备删除锁，而且已经走到了条件判断的过程中，比如他已经拿到了当前这把锁确实是属于他自己的，正准备删除锁，但是此时他的锁到期了，那么此时线程2进来，但是线程1他会接着往后执行，当他卡顿结束后，他直接就会执行删除锁那行代码，相当于条件判断并没有起到作用，这就是删锁时的原子性问题，之所以有这个问题，是因为线程1的拿锁，比锁，删锁，实际上并不是原子性的，我们要防止刚才的情况发生，
+
+![image-20240831152951012](images/readme.assets/image-20240831152951012.png)
+
+
+
+怎么确保 判断锁是否一致和释放锁是原子操作，可以使用lua脚本
+
+Redis提供了Lua脚本功能，在一个脚本中编写多条Redis命令，确保多条命令执行时的原子性。
+
+的基本语法大家可以参考网站：https://www.runoob.com/lua/lua-tutorial.html
+
+我们重点掌握Redis提供的调用函数，我们可以使用lua去操作redis，又能保证他的原子性，这样就可以实现拿锁比锁删锁是一个原子性动作了。
+
+调用语法
+
+```lua
+redis.call('命令名称', 'key', '其它参数', ...)
+```
+
+例如，我们要执行set name jack，则脚本是这样：
+
+```lua
+# 执行 set name jack
+redis.call('set', 'name', 'jack')
+```
+
+例如，我们要先执行set name Rose，再执行get name，则脚本如下：
+
+```lua
+# 先执行 set name jack
+redis.call('set', 'name', 'Rose')
+# 再执行 get name
+local name = redis.call('get', 'name')
+# 返回
+return name
+```
+
+写好脚本以后，需要用Redis命令来调用脚本，调用脚本的常见命令如下：
+
+![image-20240831200021849](images/readme.assets/image-20240831200021849.png)
+
+例如，我们要执行 redis.call('set', 'name', 'jack') 这个脚本，语法如下：
+
+![image-20240831200049951](images/readme.assets/image-20240831200049951.png)
+
+如果脚本中的key、value不想写死，可以作为参数传递。key类型参数会放入KEYS数组，其它参数会放入ARGV数组，在脚本中可以从KEYS和ARGV数组获取这些参数：
+
+![image-20240831200104017](images/readme.assets/image-20240831200104017.png)
+
+
+
+释放锁逻辑：
+
+获取当前线程标识，与传来的线程标识是否一致，不一致就结束，一致就删除锁
+
+在resouce下新建unlock.lua
+
+```lua
+-- 这里的 KEYS[1] 就是锁的key，这里的ARGV[1] 就是当前线程标示
+-- 获取锁中的标示，判断是否与当前线程标示一致
+if (redis.call('GET', KEYS[1]) == ARGV[1]) then
+  -- 一致，则删除锁
+  return redis.call('DEL', KEYS[1])
+end
+-- 不一致，则直接返回
+return 0
+```
+
+修改分布式锁实现 
+
+`stringRedisTemplate.execute()`调用lua
+
+![image-20240831202255088](images/readme.assets/image-20240831202255088.png)
+
+要求参数RedisScript，我们这里先加载lua脚本，可以设置为静态变量
+
+```java
+ private static  final DefaultRedisScript<Long> UNLOCK_SCRIPT ;
+
+    static{
+        UNLOCK_SCRIPT= new DefaultRedisScript<>();
+        UNLOCK_SCRIPT.setLocation(new ClassPathResource("unlock.lua"));
+        UNLOCK_SCRIPT.setResultType(Long.class);
+    }
+
+
+    /**
+     * 释放锁
+     * 确保判断和释放是原子操作
+     * lua脚本
+     */
+    @Override
+    public void unlock() {
+        //调用lua脚本
+        stringRedisTemplate.execute(UNLOCK_SCRIPT,
+                Collections.singletonList(KEY_PREFIX + name), ID_PREFIX + Thread.currentThread().getId());
+    }
+
+```
+
