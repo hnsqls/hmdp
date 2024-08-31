@@ -8,9 +8,11 @@ import com.hmdp.service.ISeckillVoucherService;
 import com.hmdp.service.IVoucherOrderService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.RedisIdWorker;
+import com.hmdp.utils.SimplerRedisLock;
 import com.hmdp.utils.UserHolder;
 import org.springframework.aop.framework.AopContext;
 import org.springframework.beans.BeanUtils;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,6 +34,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
     @Resource
     private RedisIdWorker redisIdWorker;
+
 
 
     /**
@@ -73,12 +76,42 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 //                .eq("stock",stock)
 //                .update();
 
-//        Long id = UserHolder.getUser().getId();
-        synchronized (UserHolder.getUser().getId().toString().intern()){
-            //解决事务不生效问题原因就是下面的方法是this.而不是sprig代理的方法
+
+        /**
+         * sync锁
+         *
+         */
+
+//        synchronized (UserHolder.getUser().getId().toString().intern()){
+//            //解决事务不生效问题原因就是下面的方法是this.而不是sprig代理的方法
+//            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+//            return proxy.createVoucherOrder(voucherId);
+//        }
+
+
+        //分布式锁 redis  锁定范围下单的用户id
+
+        //创建工具
+        SimplerRedisLock lock = new SimplerRedisLock(new StringRedisTemplate(), "order:"+UserHolder.getUser().getId());
+
+        //尝试获取锁
+        boolean isLock = lock.tryLock(5);
+
+        if (!isLock) {
+            //获取锁失败。返回错误信息
+            return Result.fail("只能下一单");
+
+        }
+        //获取锁成功
+
+        try {
             IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
             return proxy.createVoucherOrder(voucherId);
+        } finally {
+            //释放锁
+            lock.unlock();
         }
+
 
     }
 

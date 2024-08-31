@@ -2860,3 +2860,111 @@ Redis：redis作为分布式锁是非常常见的一种使用方式，现在企�
 Zookeeper：zookeeper也是企业级开发中较好的一个实现分布式锁的方案。
 
 ![image-20240831100103802](images/readme.assets/image-20240831100103802.png)
+
+### 5.2 使用Redis实现分布式锁
+
+* 获取锁
+
+  ```shell
+  set lock thread1 nx ex 30
+  ```
+
+* 释放锁
+
+  ```shell
+  del lock
+  ```
+
+  
+
+需要注意的的是：
+
+1. 获取锁能不能不加过期时间或者单独设置过期时间
+
+   ​	不能，首先需要设置过期时间，防止业务服务执行过程中宕机，导致无法释放锁。
+
+   ​	其次也不能 setnx lock  set lock ttl  因为我们需要确保他们是原子性的操作，如果不是原子性操作，在获取锁后，还未设置过期时间，业务服务就宕机。也会导致无法释放锁。
+
+
+
+在utils 新增接口
+
+```java
+public interface ILock {
+
+
+    /**
+     * 尝试获取锁
+     * @param timeoutSec
+     * @return
+     */
+    boolean tryLock(long timeoutSec);
+
+    /**
+     * 释放锁
+     */
+    void unlock();
+}
+```
+
+在utils下实现
+
+```java
+public class SimplerRedisLock implements  ILock{
+
+    private StringRedisTemplate stringRedisTemplate;
+
+    //业务名称
+    private String name;
+    //redis 中key 的前缀
+    private  static  final String KEY_PREFIX ="lock:";
+
+    public SimplerRedisLock(StringRedisTemplate stringRedisTemplate, String name) {
+        this.stringRedisTemplate = stringRedisTemplate;
+        this.name = name;
+    }
+
+    /**
+     * 获取锁
+     * @param timeoutSec
+     * @return
+     */
+    @Override
+    public boolean tryLock(long timeoutSec) {
+
+        long ThreadId = Thread.currentThread().getId();
+        Boolean aBoolean = stringRedisTemplate.opsForValue().setIfAbsent(KEY_PREFIX + name, ThreadId+"", timeoutSec, TimeUnit.SECONDS);
+
+        return Boolean.TRUE.equals(aBoolean);
+    }
+
+    /**
+     * 释放锁
+     */
+    @Override
+    public void unlock() {
+        stringRedisTemplate.delete(KEY_PREFIX+name);
+
+    }
+}
+
+```
+
+需要注意的是：
+
+` Boolean aBoolean = stringRedisTemplate.opsForValue().setIfAbsent(KEY_PREFIX + name, ThreadId+"", timeoutSec, TimeUnit.SECONDS);`
+
+做了包装可能会null，所以返回结果拆箱；
+
+
+
+修改秒杀下单逻辑：
+
+核心就是修改锁
+
+```java
+
+```
+
+
+
