@@ -89,7 +89,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 //        synchronized (UserHolder.getUser().getId().toString().intern()) { 此处加锁，是先释放锁在提交事务，假如还未提交又有新的进程进来就有问题
 
             //todo : 一人一单的判断
-            int count = seckillVoucherService.query()
+            int count = this.query()
                     .eq("user_id", UserHolder.getUser().getId())
                     .eq("voucher_id", voucherId)
                     .count();
