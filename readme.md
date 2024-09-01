@@ -3402,3 +3402,306 @@ redission可重入锁的原理是什么，可以参考ReentLock
 
 ![image-20240901090108541](images/readme.assets/image-20240901090108541.png)
 
+
+
+## 7. 优化秒杀方案
+
+### 7. 1异步优化秒杀方案
+
+之前秒杀方案的业务逻辑
+
+![image-20240901163326546](images/readme.assets/image-20240901163326546.png)
+
+![image-20240901163457725](images/readme.assets/image-20240901163457725.png)
+
+很多操作是要去操作数据库的，而且还是一个线程串行执行， 这样就会导致我们的程序执行的很慢，所以我们需要异步程序执行，那么如何加速呢？
+
+优化方案：我们将耗时比较短的逻辑判断放入到redis中，比如**是否库存足够，比如是否一人一单，这样的操作，只要这种逻辑可以完成，就意味着我们是一定可以下单完成**的，我们只需要进行快速的逻辑判断，根本就不用等下单逻辑走完，我们直接给用户返回成功， 再在后台开一个线程，后台线程慢慢的去执行queue里边的消息，这样程序不就超级快了吗？而且也不用担心线程池消耗殆尽的问题，因为这里我们的程序中并没有手动使用任何线程池，当然这里边有两个难点
+
+第一个难点是我们怎么在redis中去快速校验一人一单，还有库存判断
+
+第二个难点是由于我们校验和tomct下单是两个线程，那么我们如何知道到底哪个单他最后是否成功，或者是下单完成，为了完成这件事我们在redis操作完之后，我们会将一些信息返回给前端，同时也会把这些信息丢到异步queue中去，后续操作中，可以通过这个id来查询我们tomcat中的下单逻辑是否完成了。
+
+![image-20240901163859325](images/readme.assets/image-20240901163859325.png)
+
+我们现在来看看整体思路：当用户下单之后，判断库存是否充足只需要到redis中去根据key找对应的value是否大于0即可，如果不充足，则直接结束，如果充足，继续在redis中判断用户是否可以下单，如果set集合中没有这条数据，说明他可以下单，如果set集合中没有这条记录，则将userId和优惠卷存入到redis中，并且返回0，整个过程需要保证是原子性的，我们可以使用lua来操作
+
+当以上判断逻辑走完之后，我们可以判断当前redis中返回的结果是否是0 ，如果是0，则表示可以下单，则将之前说的信息存入到到queue中去，然后返回，然后再来个线程异步的下单，前端可以通过返回的订单id来判断是否下单成功。
+
+![image-20240901164023220](images/readme.assets/image-20240901164023220.png)
+
+秒杀业务梳理
+
+1. 将商品库存信息保存到redis中，用户后续使用redis判断是否有库存
+
+   可以放在添加秒杀优惠卷的时候做。
+
+2. 在秒杀业务中，根据id获取基本信息(开始时间，结束时间)进行过滤
+
+3. 使用redis查看是否有库存,没有库存返回提示信息，
+
+4. 有库存，在redis中判断是否已经下过单（可以使用set数据类型维护）
+
+5. 下过单 返回错误
+
+6. 没下过单，redisset集合维护已经下单的用户id，并生成订单id返回给前端
+
+7. 异步操作 开启线程任务，不断从阻塞队列中获取信息，实现异步下单功能
+
+
+
+需求：
+
+* 新增秒杀优惠券的同时，将优惠券信息保存到Redis中
+
+* 基于Lua脚本，判断秒杀库存、一人一单，决定用户是否抢购成功
+
+* 如果抢购成功，将优惠券id和用户id封装后存入阻塞队列
+
+* 开启线程任务，不断从阻塞队列中获取信息，实现异步下单功能
+
+
+
+
+
+```java
+  /**
+     * 添加秒杀优惠卷
+     * @param voucher
+     */
+    @Override
+    @Transactional
+    public void addSeckillVoucher(Voucher voucher) {
+        // 保存优惠券
+        save(voucher);
+        // 保存秒杀信息
+
+        SeckillVoucher seckillVoucher = new SeckillVoucher();
+        seckillVoucher.setVoucherId(voucher.getId());
+        seckillVoucher.setStock(voucher.getStock());
+        seckillVoucher.setBeginTime(voucher.getBeginTime());
+        seckillVoucher.setEndTime(voucher.getEndTime());
+        seckillVoucherService.save(seckillVoucher);
+
+        
+        // todo：： 优化秒杀 异步
+        // 保存秒杀库存到Redis中  用于后续使用redis判断是否有库存
+        //SECKILL_STOCK_KEY 这个变量定义在RedisConstans中
+        //private static final String SECKILL_STOCK_KEY ="seckill:stock:"
+        stringRedisTemplate.opsForValue().set(SECKILL_STOCK_KEY + voucher.getId(), voucher.getStock().toString());
+        
+    }
+```
+
+
+
+lua脚本
+
+```lua
+-- 1.参数列表
+-- 1.1.优惠券id
+local voucherId = ARGV[1]
+-- 1.2.用户id
+local userId = ARGV[2]
+-- 1.3.订单id
+local orderId = ARGV[3]
+
+-- 2.数据key
+-- 2.1.库存key
+local stockKey = 'seckill:stock:' .. voucherId
+-- 2.2.订单key
+local orderKey = 'seckill:order:' .. voucherId
+
+-- 3.脚本业务
+-- 3.1.判断库存是否充足 get stockKey
+if(tonumber(redis.call('get', stockKey)) <= 0) then
+    -- 3.2.库存不足，返回1
+    return 1
+end
+-- 3.2.判断用户是否下单 SISMEMBER orderKey userId
+if(redis.call('sismember', orderKey, userId) == 1) then
+    -- 3.3.存在，说明是重复下单，返回2
+    return 2
+end
+-- 3.4.扣库存 incrby stockKey -1
+redis.call('incrby', stockKey, -1)
+-- 3.5.下单（保存用户）sadd orderKey userId
+redis.call('sadd', orderKey, userId)
+-- 3.6.发送消息到队列中， XADD stream.orders * k1 v1 k2 v2 ...
+redis.call('xadd', 'stream.orders', '*', 'userId', userId, 'voucherId', voucherId, 'id', orderId)
+return 0
+```
+
+秒杀业务
+
+```java
+
+    /**
+     * 加载lua脚本
+     */
+    private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
+
+    static {
+        SECKILL_SCRIPT = new DefaultRedisScript<>();
+        SECKILL_SCRIPT.setLocation(new ClassPathResource("seckill.lua"));
+        SECKILL_SCRIPT.setResultType(Long.class);
+    }
+
+
+ /**
+     * 阻塞队列
+     */
+    private  BlockingQueue<VoucherOrder> orderTasks =new ArrayBlockingQueue<>(1024*1024);
+
+/**
+     * 秒杀优惠卷下单（异步优化代码）
+     *
+     * @param voucherId
+     * @return
+     */
+    @Override
+    //两表开启事务
+    public Result seckillVoucher(Long voucherId) {
+        SeckillVoucher seckillVoucher = seckillVoucherService.getById(voucherId);
+        LocalDateTime beginTime = seckillVoucher.getBeginTime();
+        LocalDateTime endTime = seckillVoucher.getEndTime();
+        LocalDateTime now = LocalDateTime.now();
+        //下单时间，不在优惠卷使用时间
+        if (beginTime.isAfter(now)) {
+            return Result.fail("秒杀还未开始");
+        }
+        if (endTime.isBefore(now)) {
+            return Result.fail("秒杀已经结束");
+        }
+        // lua 脚本 判度是否能下单成功 1. 库存  2. 是否第一次下单
+        //返回值 1 表示没库存 2 表示重复下单  3 可以下单
+        Long result = stringRedisTemplate.execute(
+                SECKILL_SCRIPT,
+                Collections.emptyList(),
+                voucherId.toString(),
+                UserHolder.getUser().getId().toString()
+
+        );
+        // Long - 》 int
+        int r = result.intValue();
+        if (r == 1){
+            return Result.fail("库存不足");
+        }
+        if (r == 2){
+            return Result.fail("重复下单");
+        }
+        //有购买资格，把下单信息保存在阻塞队列 订单id 用户id 优惠卷id
+        long orderId = redisIdWorker.nextId("order");
+        VoucherOrder voucherOrder = new VoucherOrder();
+        voucherOrder.setId(orderId);
+        voucherOrder.setUserId(UserHolder.getUser().getId());
+        voucherOrder.setVoucherId(voucherId);;
+        // todo 保存到阻塞队列
+        orderTasks.add(voucherOrder);
+
+        // todo 异步线程处理
+        //返回订单id
+        return Result.ok(orderId);
+
+
+```
+
+怎么实现异步处理
+
+开启子线程 
+
+```java
+    /**
+     * 线程池
+     */
+private static final ExecutorService SECKILL_ORDER_EXECUTOR = Executors.newSingleThreadExecutor();
+  /**
+     *代理对象
+     */
+    private IVoucherOrderService proxy ;
+
+    //在类初始化之后执行，因为当这个类初始化好了之后，随时都是有可能要执行的
+    @PostConstruct
+    private void init() {
+        SECKILL_ORDER_EXECUTOR.submit(new VoucherOrderHandler());
+    }
+ private class VoucherOrderHandler implements Runnable {
+        @Override
+        public void run() {
+            while (true){
+                try {
+                    // 1.获取队列中的订单信息
+                    VoucherOrder voucherOrder = orderTasks.take();
+                    // 2.创建订单
+                    handleVoucherOrder(voucherOrder);
+                } catch (Exception e) {
+                    log.error("处理订单异常", e);
+                }
+            }
+
+        }
+    }
+private void handleVoucherOrder(VoucherOrder voucherOrder) {
+        //获取redissionClient  获取分布式错
+        //userid 不能够从threadLocal中获取了因为线程变了，是子线程
+        Long userId = voucherOrder.getUserId();
+        RLock lock = redissonClient.getLock("lock:order:" +userId);
+
+        //尝试获取锁
+        //参数说明 第一个参数long代表等待获取锁时长默认-1 第二个参数long过期时间默认30s 第三个时间单位
+        boolean isLock = lock.tryLock();
+
+        if (!isLock) {
+            //获取锁失败。返回错误信息
+            log.error("不允许重复下单");
+            return ;
+        }
+        //获取锁成功
+
+        try {
+            //获取代理对象
+            //开启异步线程就不是threadLocal了，因为线程变了就拿不到代理对象了
+//            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+
+             proxy.createVoucherOrder2(voucherOrder);
+        } finally {
+            //释放锁
+            lock.unlock();
+        }
+    }
+
+    /**
+     * 创建订单  使用异步队列改造后的业务逻辑
+     * @param voucherOrder
+     */
+    @Override
+    @Transactional
+    public void createVoucherOrder2(VoucherOrder voucherOrder) {
+
+        Long userId = voucherOrder.getUserId();
+        //todo : 一人一单的判断
+        int count = this.query()
+                .eq("user_id", UserHolder.getUser().getId())
+                .eq("voucher_id", userId)
+                .count();
+
+        if (count > 0) {
+            log.error("不能重复购买");
+            return ;
+        }
+
+        boolean success = seckillVoucherService.update().
+                setSql("stock = stock - 1")
+                .eq("voucher_id", voucherOrder.getVoucherId())
+                .gt("stock", 0)
+                .update();
+        if (!success) {
+            log.error("库存不足");
+            return ;
+        }
+
+        save(voucherOrder);
+    }
+```
+
+需要注意的是： 开启异步线程，就不是threadlLocal，用户的信息在子线程不可取，也取不到代理。
