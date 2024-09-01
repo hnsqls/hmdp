@@ -3265,3 +3265,140 @@ public class RedissonConfig {
 
 ```
 
+使用
+
+```java
+ /**
+     * 秒杀优惠卷下单
+     *
+     * @param voucherId
+     * @return
+     */
+    @Override
+    //两表开启事务
+    public Result seckillVoucher(Long voucherId) {
+        SeckillVoucher seckillVoucher = seckillVoucherService.getById(voucherId);
+        LocalDateTime beginTime = seckillVoucher.getBeginTime();
+        LocalDateTime endTime = seckillVoucher.getEndTime();
+        LocalDateTime now = LocalDateTime.now();
+        //下单时间，不在优惠卷使用时间
+        if (beginTime.isAfter(now)) {
+            return Result.fail("秒杀还未开始");
+        }
+        if (endTime.isBefore(now)) {
+            return Result.fail("秒杀已经结束");
+        }
+        //判断库存是否充足---》
+        int stock = seckillVoucher.getStock();
+
+        if (stock <= 0) {
+            return Result.fail("库存不足");
+        }
+        /**下单库存减一 解决超卖问题使用乐观锁,
+         * 但是以上这种方式通过测试发现会有很多失败的情况，
+         * 失败的原因在于：在使用乐观锁过程中假设100个线程同时都拿到了100的库存，
+         * 然后大家一起去进行扣减，但是100个人中只有1个人能扣减成功，
+         * 其他的人在处理时，他们在扣减时，库存已经被修改过了，
+         * 所以此时其他线程都会失败.
+         */
+//        boolean success = seckillVoucherService.update().
+//                setSql("stock = stock - 1")
+//                .eq("voucher_id", voucherId)
+//                .eq("stock",stock)
+//                .update();
+
+
+        /**
+         * sync锁
+         *
+         */
+
+//        synchronized (UserHolder.getUser().getId().toString().intern()){
+//            //解决事务不生效问题原因就是下面的方法是this.而不是sprig代理的方法
+//            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+//            return proxy.createVoucherOrder(voucherId);
+//        }
+
+
+        //分布式锁 redis 自己实现 锁定范围下单的用户id
+
+        // range
+        //创建工具
+//         SimplerRedisLock lock = new SimplerRedisLock(new StringRedisTemplate(), "order:"+UserHolder.getUser().getId());
+        //尝试获取锁
+//        boolean isLock = lock.tryLock(5);//自己定义的setnx
+        // ranged
+
+        /**
+         * redission分布式锁
+         */
+
+        //获取redissionClient  获取分布式错
+        RLock lock = redissonClient.getLock("lock:order:" + UserHolder.getUser().getId());
+
+        //尝试获取锁
+        //参数说明 第一个参数long代表等待获取锁时长默认-1 第二个参数long过期时间默认30s 第三个时间单位
+        boolean isLock = lock.tryLock();
+
+        if (!isLock) {
+            //获取锁失败。返回错误信息
+            return Result.fail("只能下一单");
+
+        }
+        //获取锁成功
+
+        try {
+            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
+        } finally {
+            //释放锁
+            lock.unlock();
+        }
+
+    }
+```
+
+
+
+### 6.2 可重入锁原理
+
+> 什么是可重入锁?
+
+就是在一个线程中有两个方式A,B执行A方法的时候要获取锁，执行B方法的时候也要获取锁，两者都要获取相同的锁。如果使用我们自己上述实现的setnx 锁 方法A可以拿到锁，方法B就那不到锁
+
+redission提供了分布式锁，实现了可重入。
+
+redission可重入锁的原理是什么，可以参考ReentLock
+
+简单来说就是，锁的设计不仅仅要记录线程的标识，还要记录获取锁的次数，通过线程标识来判断是否可以获取锁或删除锁（确保删除自己的锁），通过获取锁的次数，来标识是否要删除锁
+
+逻辑图如下
+
+![image-20240901084538005](images/readme.assets/image-20240901084538005.png)
+
+要确保上述逻辑的原子性。使用lua脚本
+
+获取锁的lua脚本
+
+![image-20240901084710568](images/readme.assets/image-20240901084710568.png)
+
+
+
+释放锁的lua脚本
+
+![image-20240901084949182](images/readme.assets/image-20240901084949182.png)
+
+以上是可重入锁的原理
+
+看下redission锁的源码、
+
+查看trylock的实现方法： crtl + alt + b
+
+![image-20240901085210303](images/readme.assets/image-20240901085210303.png)
+
+![image-20240901085906296](images/readme.assets/image-20240901085906296.png)
+
+释放锁
+
+![image-20240901090108541](images/readme.assets/image-20240901090108541.png)
+

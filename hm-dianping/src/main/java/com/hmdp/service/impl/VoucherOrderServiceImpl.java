@@ -97,7 +97,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 //        }
 
 
-        //分布式锁 redis  锁定范围下单的用户id
+        //分布式锁 redis 自己实现 锁定范围下单的用户id
 
         // range
         //创建工具
