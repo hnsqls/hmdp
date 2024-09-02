@@ -3837,5 +3837,152 @@ Blog 类
 
 
 
+### 9.3 点赞功能
 
+```java
+@GetMapping("/likes/{id}")
+public Result queryBlogLikes(@PathVariable("id") Long id) {
+    //修改点赞数量
+    blogService.update().setSql("liked = liked +1 ").eq("id",id).update();
+    return Result.ok();
+}
+```
+
+问题分析：这种方式会导致一个用户无限点赞，明显是不合理的
+
+造成这个问题的原因是，我们现在的逻辑，发起请求只是给数据库+1，所以才会出现这个问题
+
+![image-20240902102445611](images/readme.assets/image-20240902102445611.png)
+
+完善点赞功能
+
+需求：
+
+* 同一个用户只能点赞一次，再次点击则取消点赞
+* 如果当前用户已经点赞，则点赞按钮高亮显示（前端已实现，判断字段Blog类的isLike属性）
+
+
+
+实现步骤：
+
+* 给Blog类中添加一个isLike字段，标示是否被当前用户点赞
+* 修改点赞功能，利用Redis的set集合判断是否点赞过，未点赞过则点赞数+1，已点赞过则点赞数-1
+* 修改根据id查询Blog的业务，判断当前登录用户是否点赞过，赋值给isLike字段
+* 修改分页查询Blog业务，判断当前登录用户是否点赞过，赋值给isLike字段
+
+
+
+
+
+具体步骤：
+
+1、在Blog 添加一个字段
+
+```java
+@TableField(exist = false)
+private Boolean isLike;
+```
+
+2.controller
+
+```java
+    @PutMapping("/like/{id}")
+    public Result likeBlog(@PathVariable("id") Long id) {
+
+        // 修改点赞数量
+
+        return blogService.likeBlog(id);
+    }
+```
+
+3.service
+
+```java
+ /**
+     * 点赞功能
+     * @param id
+     * @return
+     */
+    @Override
+    public Result likeBlog(Long id) {
+        //判断当前登录用户 是否已经点赞
+        Long userId = UserHolder.getUser().getId();
+        //查看redis 中set集合  以blog：id 为 key   以用户id为v的集合存不存在
+
+        String key = "blog:liked:" + id;
+        Boolean isMember = stringRedisTemplate.opsForSet().isMember(key, userId.toString());
+        if (Boolean.FALSE.equals(isMember)) {
+              //未点赞，可以点赞
+                    // 数据库点赞 + 1
+            boolean isSuccess = update().setSql("liked = liked + 1").eq("id", id).update();
+            //将用户id 存放在管理点赞的set集合中
+            if (isSuccess){
+                stringRedisTemplate.opsForSet().add(key,userId.toString());
+            }
+        }else {
+
+            //已经点赞 取消点赞
+            //数据库点在 - 1
+            boolean isSuccess = update().setSql("liked = liked - 1").eq("id", id).update();
+
+            if (isSuccess){
+                //管理点赞的set集合中 删除用户id
+                stringRedisTemplate.opsForSet().remove(key,userId.toString());
+            }
+        }
+        return Result.ok();
+
+    }
+```
+
+注意还要修改该查询blog接口 添加isLied返回值
+
+```java
+    @GetMapping("/{id}")
+    public Result queryBlogById(@PathVariable Long id){
+        Blog blog = blogService.getById(id);
+        if (blog == null){
+            return Result.fail("博客不存在");
+        }
+        //查询blog有关用户
+        User user = userService.getById(blog.getUserId());
+        blog.setIcon(user.getIcon());
+        blog.setName(user.getNickName());
+
+        //查看是否已经点过赞
+        String key = "blog:liked" + id;
+
+        Boolean isMember = stringRedisTemplate.opsForSet().isMember(key, user.getId().toString());
+        blog.setIsLike(Boolean.TRUE.equals(isMember));
+
+
+        return Result.ok(blog);
+    }
+
+
+   @GetMapping("/hot")
+    public Result queryHotBlog(@RequestParam(value = "current", defaultValue = "1") Integer current) {
+        // 根据用户查询
+        Page<Blog> page = blogService.query()
+                .orderByDesc("liked")
+                .page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE));
+        // 获取当前页数据
+        List<Blog> records = page.getRecords();
+        // 查询用户
+        records.forEach(blog ->{
+            Long userId = blog.getUserId();
+            User user = userService.getById(userId);
+            blog.setName(user.getNickName());
+            blog.setIcon(user.getIcon());
+
+            //查看是否已经点过赞
+            String key = "blog:liked" + blog.getId();
+
+            Boolean isMember = stringRedisTemplate.opsForSet().isMember(key, user.getId().toString());
+            blog.setIsLike(Boolean.TRUE.equals(isMember));
+        });
+
+        return Result.ok(records);
+    }
+```
 

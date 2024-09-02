@@ -10,6 +10,7 @@ import com.hmdp.service.IBlogService;
 import com.hmdp.service.IUserService;
 import com.hmdp.utils.SystemConstants;
 import com.hmdp.utils.UserHolder;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
@@ -27,6 +28,10 @@ public class BlogController {
     @Resource
     private IUserService userService;
 
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+
+
     @PostMapping
     public Result saveBlog(@RequestBody Blog blog) {
         // 获取登录用户
@@ -40,10 +45,10 @@ public class BlogController {
 
     @PutMapping("/like/{id}")
     public Result likeBlog(@PathVariable("id") Long id) {
+
         // 修改点赞数量
-        blogService.update()
-                .setSql("liked = liked + 1").eq("id", id).update();
-        return Result.ok();
+
+        return blogService.likeBlog(id);
     }
 
     @GetMapping("/of/me")
@@ -72,7 +77,14 @@ public class BlogController {
             User user = userService.getById(userId);
             blog.setName(user.getNickName());
             blog.setIcon(user.getIcon());
+
+            //查看是否已经点过赞
+            String key = "blog:liked" + blog.getId();
+
+            Boolean isMember = stringRedisTemplate.opsForSet().isMember(key, user.getId().toString());
+            blog.setIsLike(Boolean.TRUE.equals(isMember));
         });
+
         return Result.ok(records);
     }
 
@@ -83,10 +95,16 @@ public class BlogController {
             return Result.fail("博客不存在");
         }
         //查询blog有关用户
-
         User user = userService.getById(blog.getUserId());
         blog.setIcon(user.getIcon());
         blog.setName(user.getNickName());
+
+        //查看是否已经点过赞
+        String key = "blog:liked" + id;
+
+        Boolean isMember = stringRedisTemplate.opsForSet().isMember(key, user.getId().toString());
+        blog.setIsLike(Boolean.TRUE.equals(isMember));
+
 
         return Result.ok(blog);
     }
