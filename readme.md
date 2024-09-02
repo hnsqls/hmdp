@@ -3705,3 +3705,137 @@ private void handleVoucherOrder(VoucherOrder voucherOrder) {
 ```
 
 需要注意的是： 开启异步线程，就不是threadlLocal，用户的信息在子线程不可取，也取不到代理。
+
+ 
+
+##  8 todo ：redis消息队列
+
+
+
+## 9.  达人探店
+
+ ### 9.1 发布探店笔记
+
+发布探店笔记
+
+探店笔记类似点评网站的评价，往往是图文结合。对应的表有两个：
+tb_blog：探店笔记表，包含笔记中的标题、文字、图片等
+tb_blog_comments：其他用户对探店笔记的评价
+
+
+
+**具体发布流程**
+
+![1653578992639](images/readme.assets/1653578992639.png)
+
+上传图片，其他服务也需要，就单独写出来
+
+```java
+@Slf4j
+@RestController
+@RequestMapping("upload")
+public class UploadController {
+
+    @PostMapping("blog")
+    public Result uploadImage(@RequestParam("file") MultipartFile image) {
+        try {
+            // 获取原始文件名称
+            String originalFilename = image.getOriginalFilename();
+            // 生成新文件名
+            String fileName = createNewFileName(originalFilename);
+            // 保存文件
+            image.transferTo(new File(SystemConstants.IMAGE_UPLOAD_DIR, fileName));
+            // 返回结果
+            log.debug("文件上传成功，{}", fileName);
+            return Result.ok(fileName);
+        } catch (IOException e) {
+            throw new RuntimeException("文件上传失败", e);
+        }
+    }
+
+}
+```
+
+保存图片可以使用oss或者minio 或者本地
+
+![image-20240902092900842](images/readme.assets/image-20240902092900842.png)
+
+blogcontroller
+
+```java
+@RestController
+@RequestMapping("/blog")
+public class BlogController {
+
+    @Resource
+    private IBlogService blogService;
+
+    @PostMapping
+    public Result saveBlog(@RequestBody Blog blog) {
+        //获取登录用户
+        UserDTO user = UserHolder.getUser();
+        blog.setUpdateTime(user.getId());
+        //保存探店博文
+        blogService.saveBlog(blog);
+        //返回id
+        return Result.ok(blog.getId());
+    }
+}
+```
+
+
+
+### 9.2 查看探店笔记
+
+实现查看发布探店笔记的接口
+
+![image-20240902093828563](images/readme.assets/image-20240902093828563.png)
+
+不仅仅要返回blog信息还要返回用户信息，可以链表查询，也可以在blog里添加字段
+
+Blog 类
+
+```java
+
+    /**
+     * 用户图标
+     */
+    @TableField(exist = false)
+    private String icon;
+
+
+    /**
+     * 用户姓名
+     */
+    @TableField(exist = false)
+    private String name;
+    /**
+     * 是否点赞过了
+     */
+    @TableField(exist = false)
+    private Boolean isLike;
+```
+
+​    `@TableField(exist = false) ` 表示不属于数据库字段
+
+```java
+    @GetMapping("/{id}")
+    public Result queryBlogById(@PathVariable Long id){
+        Blog blog = blogService.getById(id);
+        if (blog == null){
+            return Result.fail("博客不存在");
+        }
+        //查询blog有关用户
+
+        User user = userService.getById(blog.getUserId());
+        blog.setIcon(user.getIcon());
+        blog.setName(user.getNickName());
+
+        return Result.ok(blog);
+    }
+```
+
+
+
+
+

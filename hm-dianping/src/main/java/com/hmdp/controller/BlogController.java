@@ -75,4 +75,19 @@ public class BlogController {
         });
         return Result.ok(records);
     }
+
+    @GetMapping("/{id}")
+    public Result queryBlogById(@PathVariable Long id){
+        Blog blog = blogService.getById(id);
+        if (blog == null){
+            return Result.fail("博客不存在");
+        }
+        //查询blog有关用户
+
+        User user = userService.getById(blog.getUserId());
+        blog.setIcon(user.getIcon());
+        blog.setName(user.getNickName());
+
+        return Result.ok(blog);
+    }
 }

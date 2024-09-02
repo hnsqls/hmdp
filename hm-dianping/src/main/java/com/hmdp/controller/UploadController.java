@@ -20,8 +20,10 @@ public class UploadController {
     @PostMapping("blog")
     public Result uploadImage(@RequestParam("file") MultipartFile image) {
         try {
+
             // 获取原始文件名称
             String originalFilename = image.getOriginalFilename();
+
             // 生成新文件名
             String fileName = createNewFileName(originalFilename);
             // 保存文件

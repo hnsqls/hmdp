@@ -31,15 +31,21 @@ public class Blog implements Serializable {
      * 商户id
      */
     private Long shopId;
+
+
     /**
      * 用户id
      */
     private Long userId;
+
+
     /**
      * 用户图标
      */
     @TableField(exist = false)
     private String icon;
+
+
     /**
      * 用户姓名
      */
