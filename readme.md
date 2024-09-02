@@ -3986,3 +3986,110 @@ private Boolean isLike;
     }
 ```
 
+
+
+
+
+## 10.好友关注
+
+### 10.1关注和取关
+
+user可以关注很多人，也可以被很多人关注，这个关系维护在`tb_follow`表中
+
+![image-20240902163831032](images/readme.assets/image-20240902163831032.png)
+
+关注就是就是将用户id和被关注的id查进来，取关就是删除
+
+接口如下
+
+![image-20240902163956892](images/readme.assets/image-20240902163956892.png)
+
+
+
+```java
+@RestController
+@RequestMapping("/follow")
+public class FollowController {
+
+    @Resource
+    private IFollowService followService;
+
+    /**
+     * 关注或取关
+     * @param followUserId
+     * @param isFollow
+     * @return
+     */
+    @PutMapping("/{id}/{isFollow}")
+    public Result follow(@PathVariable("id") Long followUserId,@PathVariable("isFollow") boolean isFollow){
+        return followService.follow(followUserId,isFollow);
+    }
+
+    /**
+     * 查看是否关注
+     * @param followUserId
+     * @return
+     */
+    @GetMapping("/or/not/{id}")
+    public Result follow(@PathVariable("id") Long followUserId){
+        return followService.isFollow(followUserId);
+    }
+
+}
+
+```
+
+实现
+
+```java
+
+    /**
+     * 关注或取关
+     * @param followUserId
+     * @param isFollow
+     * @return
+     */
+    @Override
+    public Result follow(Long followUserId, boolean isFollow) {
+        //获取用户信息
+        Long userId = UserHolder.getUser().getId();
+        //判断是否是关注还是取关
+        if (isFollow){
+            //关注 新增数据
+            Follow follow = new Follow();
+            follow.setUserId(userId);
+            follow.setFollowUserId(followUserId);
+            save(follow);
+        }else {
+            //取关  删除数据
+            LambdaQueryWrapper<Follow> followLambdaQueryWrapper = new LambdaQueryWrapper<>();
+            LambdaQueryWrapper<Follow> queryWrapper = followLambdaQueryWrapper.eq(Follow::getFollowUserId, userId)
+                    .eq(Follow::getFollowUserId, followUserId);
+            remove(queryWrapper);
+        }
+
+        return Result.ok();
+    }
+
+
+    /**
+     *判断用户是否关注
+     * 查tb_follow 表 粗在就是关注了，不存在就是没有关注
+     * @param followUserId
+     * @return
+     */
+    @Override
+    public Result isFollow(Long followUserId) {
+        //用户信息
+        Long userId = UserHolder.getUser().getId();
+
+        //查tb_follow 表 粗在就是关注了，不存在就是没有关注
+        LambdaQueryWrapper<Follow> followLambdaQueryWrapper = new LambdaQueryWrapper<>();
+        LambdaQueryWrapper<Follow> queryWrapper = followLambdaQueryWrapper.eq(Follow::getUserId, userId)
+                .eq(Follow::getFollowUserId, followUserId);
+
+        int count = count(queryWrapper);
+        return Result.ok(count > 0 );
+    }
+```
+
