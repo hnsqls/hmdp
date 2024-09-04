@@ -1,17 +1,25 @@
 package com.hmdp.controller;
 
 
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.LoginFormDTO;
 import com.hmdp.dto.Result;
+import com.hmdp.dto.UserDTO;
+import com.hmdp.entity.Blog;
+import com.hmdp.entity.User;
 import com.hmdp.entity.UserInfo;
 import com.hmdp.service.IUserInfoService;
 import com.hmdp.service.IUserService;
+import com.hmdp.utils.SystemConstants;
 import com.hmdp.utils.UserHolder;
+import com.sun.org.apache.regexp.internal.RE;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.BeanUtils;
 import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpSession;
+import java.util.List;
 
 /**
  * @author ls
@@ -76,4 +84,21 @@ public class UserController {
         // 返回
         return Result.ok(info);
     }
+
+    /**
+     * 查看用户主页基本信息
+     * @param userId
+     * @return
+     */
+    @GetMapping("{id}")
+    public Result queryUserById(@PathVariable("id") Long userId){
+        User user = userService.getById(userId);
+        if (user == null){
+            return Result.ok();
+        }
+       return Result.ok(user);
+    }
+
+
+
 }

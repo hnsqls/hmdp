@@ -4093,3 +4093,160 @@ public class FollowController {
     }
 ```
 
+### 10.2 共同关注
+
+前置：进入到用户的个人主页
+
+![image-20240902181750606](images/readme.assets/image-20240902181750606.png)
+
+usercontroller 新增接口
+
+```java
+/**
+     * 查看用户主页基本信息
+     * @param userId
+     * @return
+     */
+    @GetMapping("{id}")
+    public Result queryUserById(@PathVariable("id") Long userId){
+        User user = userService.getById(userId);
+        if (user == null){
+            return Result.ok();
+        }
+       return Result.ok(user);
+    }
+
+
+```
+
+// BlogController  根据id查询博主的探店笔记
+
+```java
+
+    @GetMapping("/of/user")
+    public Result queryBlogByUserId(
+            @RequestParam(value = "current", defaultValue = "1") Integer current,
+            @RequestParam("id") Long id) {
+        // 根据用户查询
+        Page<Blog> page = blogService.query()
+                .eq("user_id", id).page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE));
+        // 获取当前页数据
+        List<Blog> records = page.getRecords();
+        return Result.ok(records);
+    }
+```
+
+共同关注
+
+![image-20240904091237241](images/readme.assets/image-20240904091237241.png)
+
+实现逻辑：当前的登录用户关注和被查看的用户的关注的集合
+
+可以在数据库中维护关注表，查询当前用户关注了的集合和被查看用户关注的集合取交集。
+
+
+
+也可以用Redis中恰当的数据结构，实现共同关注功能。在博主个人页面展示出当前用户与博主的共同关注呢。
+
+当然是使用我们之前学习过的set集合咯，在set集合中，有交集并集补集的api，我们可以把两人的关注的人分别放入到一个set集合中，然后再通过api去查看这两个set集合中的交集数据。
+
+用set集合维护关注的人的信息，那么关注的时候维护 集合，改造关注接口
+
+follow service
+
+```java
+   /**
+     * 关注或取关
+     * @param followUserId
+     * @param isFollow
+     * @return
+     */
+    @Override
+    public Result follow(Long followUserId, boolean isFollow) {
+        //获取用户信息
+        Long userId = UserHolder.getUser().getId();
+        //判断是否是关注还是取关
+        if (isFollow){
+            //关注 新增数据
+            Follow follow = new Follow();
+            follow.setUserId(userId);
+            follow.setFollowUserId(followUserId);
+            boolean isSuccess = save(follow);
+
+            //todo redis 实现共同关注，在关注的时候维护set集合  k:当前用户id v 被关注的用户id
+            if (isSuccess){
+                String key =  "follows:" + userId;
+                stringRedisTemplate.opsForSet().add(key,followUserId.toString());
+            }
+
+
+        }else {
+            //取关  删除数据
+            LambdaQueryWrapper<Follow> followLambdaQueryWrapper = new LambdaQueryWrapper<>();
+            LambdaQueryWrapper<Follow> queryWrapper = followLambdaQueryWrapper.eq(Follow::getFollowUserId, userId)
+                    .eq(Follow::getFollowUserId, followUserId);
+            boolean isSuccess = remove(queryWrapper);
+
+            //todo redis 实现共同关注，在关注的时候维护set集合  k:当前用户id v 被关注的用户id
+            if (isSuccess){
+
+                String key =  "follows:" + userId;
+                stringRedisTemplate.opsForSet().remove(key,followUserId.toString());
+            }
+        }
+
+        return Result.ok();
+    }
+
+```
+
+新增接口以及实现类
+
+```java
+
+    /**
+     * 共同关注
+     * @param followUserId
+     * @return
+     */
+    @GetMapping("common/{id}")
+    public Result commonFollow(@PathVariable("id") Long followUserId){
+
+        return  followService.commonFollow(followUserId);
+    }
+```
+
+
+
+```java
+/**
+     * 共同关注
+     * @param followUserId  被查看关注的id
+     * @return
+     */
+    @Override
+    public Result commonFollow(Long followUserId) {
+        //当前用户的关注
+        Long userId = UserHolder.getUser().getId();
+        String key =  "follows:" + userId;
+        //当前用户
+        String key2 =  "follows:" + userId;
+
+        Set<String> intersect = stringRedisTemplate.opsForSet().intersect(key, key2);
+
+        if (intersect ==null || intersect.isEmpty()){
+            return Result.ok(Collections.emptyList());
+        }
+        //解析出id String-> Long
+        List<Long> collect = intersect.stream().map(Long::valueOf).collect(Collectors.toList());
+
+        //查询用户
+        List<UserDTO> userDTOList = userService.listByIds(collect)
+                .stream()
+                .map(user -> BeanUtil.copyProperties(user, UserDTO.class))
+                .collect(Collectors.toList());
+        return Result.ok(userDTOList);
+    }
+```
+
+stream流
