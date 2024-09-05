@@ -1,12 +1,15 @@
 package com.hmdp.controller;
 
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.Blog;
+import com.hmdp.entity.Follow;
 import com.hmdp.entity.User;
 import com.hmdp.service.IBlogService;
+import com.hmdp.service.IFollowService;
 import com.hmdp.service.IUserService;
 import com.hmdp.utils.SystemConstants;
 import com.hmdp.utils.UserHolder;
@@ -15,6 +18,8 @@ import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
 import java.util.List;
+
+import static com.hmdp.utils.RedisConstants.FEED_KEY;
 
 /**
  * @author ls
@@ -29,6 +34,8 @@ public class BlogController {
     private IUserService userService;
 
     @Resource
+    private IFollowService followService;
+    @Resource
     private StringRedisTemplate stringRedisTemplate;
 
 
@@ -38,7 +45,25 @@ public class BlogController {
         User user = UserHolder.getUser();
         blog.setUserId(user.getId());
         // 保存探店博文
-        blogService.save(blog);
+        boolean isSuccess = blogService.save(blog);
+        if (!isSuccess){
+            return Result.fail("添加博文失败");
+        }
+        //todo : 推送粉丝
+        //查询粉丝 select *from tb_follow where follow_user_id = ?  #{userid}
+        LambdaQueryWrapper<Follow> followLambdaQueryWrapper = new LambdaQueryWrapper<>();
+        followLambdaQueryWrapper.eq(Follow::getFollowUserId,user.getId());
+        List<Follow> follows = followService.list(followLambdaQueryWrapper);
+
+        for (Follow follow : follows) {
+            //
+            //获取粉丝id
+            Long userId = follow.getUserId();
+            // 推送  zset weihu
+            String key = FEED_KEY + userId;
+            stringRedisTemplate.opsForZSet().add(key,userId.toString(),System.currentTimeMillis());
+
+        }
         // 返回id
         return Result.ok(blog.getId());
     }
