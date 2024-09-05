@@ -4376,5 +4376,129 @@ Feed流的滚动分页
     }
 ```
 
+### 10.4 滚动分页获取关注人的笔记推送
 
+滚动分页怎么实现，重点是避免查询重复元素
+
+用角标肯定不行，例如数据 5 4 3 2 1 查询第一页 每页两条 结果就是5 4.
+
+在查询第二页之前，元素又新增6 即列表是 6 5 4  3 2 1 .查询第二页 结果就是 4 3，这样查询就重复了
+
+可以使用redis的zset数据结构 ，根据scroe查询,每次查询记录最小的分数，从该分数的下面查询。
+
+需要注意的时：分数一样的情况下的偏移量
+
+
+
+需求：在个人主页的“关注”卡片中，查询并展示推送的Blog信息：
+
+具体操作如下：
+
+1、每次查询完成后，我们要分析出查询出数据的最小时间戳，这个值会作为下一次查询的条件
+
+2、我们需要找到与上一次查询相同的查询个数作为偏移量，下次查询时，跳过这些查询过的数据，拿到我们需要的数据
+
+综上：我们的请求参数中就需要携带 lastId：上一次查询的最小时间戳 和偏移量这两个参数。
+
+这两个参数第一次会由前端来指定，以后的查询就根据后台结果作为条件，再次传递到后台。
+
+![image-20240905104348552](images/readme.assets/image-20240905104348552.png)
+
+一、定义出来具体的返回值实体类
+
+```java
+@Data
+public class ScrollResult {
+    private List<?> list;
+    private Long minTime;
+    private Integer offset;
+}
+```
+
+BlogController
+
+注意：RequestParam 表示接受url地址栏传参的注解，当方法上参数的名称和url地址栏不相同时，可以通过RequestParam 来进行指定
+
+```java
+@GetMapping("/of/follow")
+public Result queryBlogOfFollow(
+    @RequestParam("lastId") Long max, @RequestParam(value = "offset", defaultValue = "0") Integer offset){
+    return blogService.queryBlogOfFollow(max, offset);
+}
+```
+
+imp
+
+```java
+    /**
+     * 滚动分页获取关注的人的发送
+     * @param max
+     * @param offset
+     * @return
+     */
+    @Override
+    public Result queryBlogOfFollow(Long max, Integer offset) {
+        //当前用户信息
+        Long userId = UserHolder.getUser().getId();
+        //查看当前用户的被推送 zrevrangebySCore key max min Limit offset count
+        String key = FEED_KEY + userId;
+
+        Set<ZSetOperations.TypedTuple<String>> typedTuples = stringRedisTemplate.opsForZSet()
+                .reverseRangeByScoreWithScores(key, 0, max, offset, 2);
+        //非空判断
+        if (typedTuples == null || typedTuples.isEmpty()) {
+            return Result.ok();
+        }
+
+        //数据解析-》
+        // 为下一次分页的参数获取，这一次最后的时间戳（最小的时间戳）作为下一次查询最大的时间戳(max)
+        // 最小时间戳出现的次数作为下次查询的偏移量
+        // blogids 作为参数查询bloglist 返回数据
+
+        List<Long> ids = new ArrayList<>(typedTuples.size());
+        long minTime = 0;
+        int count = 1;
+        for (ZSetOperations.TypedTuple<String> tuple : typedTuples) {
+            //获取id
+            String idStr = tuple.getValue();
+            ids.add(Long.valueOf(idStr));
+            //时间戳
+             Long time =  tuple.getScore().longValue();
+             if (time == minTime){
+                 count++;
+             }else {
+                 count = 1;
+                 minTime =time;
+             }
+        }
+
+        //根据id 查询blog
+
+//        List<Blog> blogs = listByIds(ids); 注意在mp中这个方法其实就是in查询，返回的结果时无序的
+
+        String idStr = StrUtil.join(",", ids);
+        List<Blog> blogs = query().in("id", ids).last("ORDER BY FIELD(id," + idStr + ")").list();
+
+
+        //todo 查询博文有关信息  
+//        for (Blog blog : blogs) {
+//            // 5.1.查询blog有关的用户
+//            queryBlogUser(blog);
+//            // 5.2.查询blog是否被点赞
+//            isBlogLiked(blog);
+//        }
+        
+        
+        
+        //包装返回结果
+
+        ScrollResult r = new ScrollResult();
+        r.setList(blogs);
+        r.setOffset(count);
+        r.setMinTime(minTime);
+
+
+        return Result.ok(r);
+    }
+```
 

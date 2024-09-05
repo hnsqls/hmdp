@@ -55,13 +55,14 @@ public class BlogController {
         followLambdaQueryWrapper.eq(Follow::getFollowUserId,user.getId());
         List<Follow> follows = followService.list(followLambdaQueryWrapper);
 
+        //推送粉丝blogId
         for (Follow follow : follows) {
             //
             //获取粉丝id
             Long userId = follow.getUserId();
-            // 推送  zset weihu
+            // 推送  zset 维护的 是 以FEED_KEY +userid 为 k, blog.id 为 value 的集合
             String key = FEED_KEY + userId;
-            stringRedisTemplate.opsForZSet().add(key,userId.toString(),System.currentTimeMillis());
+            stringRedisTemplate.opsForZSet().add(key,blog.getId().toString(),System.currentTimeMillis());
 
         }
         // 返回id
@@ -152,5 +153,18 @@ public class BlogController {
         // 获取当前页数据
         List<Blog> records = page.getRecords();
         return Result.ok(records);
+    }
+
+
+    /**
+     * 滚动分页查询关注的人的推送
+     * @param max
+     * @param offset
+     * @return
+     */
+    @GetMapping("/of/follow")
+    public Result queryBlogOfFollow(
+            @RequestParam("lastId") Long max, @RequestParam(value = "offset", defaultValue = "0") Integer offset){
+        return blogService.queryBlogOfFollow(max, offset);
     }
 }
