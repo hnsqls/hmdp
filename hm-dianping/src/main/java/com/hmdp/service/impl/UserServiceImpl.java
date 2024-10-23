@@ -15,10 +15,12 @@ import com.hmdp.utils.RedisConstants;
 import com.hmdp.utils.RegexUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import javax.servlet.http.HttpSession;
+import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Random;
@@ -79,6 +81,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         //根据手机号判断用户是否存在
         LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(User::getPhone,loginForm.getPhone());
+        queryWrapper.select(User::getId,User::getNickName,User::getIcon);
         User user = super.getOne(queryWrapper);
         if (user ==null){
             //用户不存在，注册用户，填上基本信息,保存
@@ -95,17 +98,55 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         //用户信息保存在redis中  以随机token为k,用户信息为v
         String token = UUID.randomUUID().toString(true);
         //将对象转为hash类型
-        Map<String, Object> usermap = BeanUtil.beanToMap(user,new HashMap<>(),
-                CopyOptions.create()
-                        .setIgnoreNullValue(true)
-                        .setFieldValueEditor((fieldName,fieldValue) -> fieldValue.toString()));
+        //hutool
+//        Map<String, Object> usermap = BeanUtil.beanToMap(user,new HashMap<>(),
+//                CopyOptions.create()
+//                        .setIgnoreNullValue(true)
+//                        .setFieldValueEditor((fieldName,fieldValue) -> fieldValue.toString()));
+
+        //自定义函数 对象转map.
+        Map<String, String> usermap = convert(user);
+        //user ->> usermap0
+
+//        Map<String, Object> usermap = BeanUtil.beanToMap(user);//这种会报错，可以转成map但是Long 类型的id,在存redis中要求变成string类型会报错。
         //存在redis中
         redisTemplate.opsForHash().putAll(RedisConstants.LOGIN_USER_KEY+token,usermap);
         //设置token有效期
-        redisTemplate.expire(RedisConstants.LOGIN_USER_KEY +token,12,TimeUnit.HOURS);
+        redisTemplate.expire(RedisConstants.LOGIN_USER_KEY +token,30,TimeUnit.MINUTES);
 
         //返回token
         return Result.ok(token) ;
+    }
+
+    /**
+     * 对象 转 map
+     */
+    public static Map<String, String> convert(Object obj) {
+        Map<String, String> result = new HashMap<>();
+
+        // 获取对象的类
+        Class<?> clazz = obj.getClass();
+
+        // 遍历类的所有字段
+        for (Field field : clazz.getDeclaredFields()) {
+            // 设置字段为可访问
+            field.setAccessible(true);
+
+            try {
+                // 获取字段的值
+                Object value = field.get(obj);
+
+                // 将字段名和值添加到Map中
+                if (value != null) {
+                    result.put(field.getName(), value.toString());
+                }
+            } catch (IllegalAccessException e) {
+                e.printStackTrace();
+                // 可以选择记录日志或抛出异常，这里简单处理为打印堆栈跟踪
+            }
+        }
+
+        return result;
     }
 
 }

@@ -44,6 +44,7 @@ public class LoginInterceptor implements HandlerInterceptor {
 //
 //        return true;
 
+        System.out.println("拦截器执行了");
         // TODO 1. 获取token
         String token = request.getHeader("authorization");
         if (StrUtil.isBlank(token)) {
@@ -67,7 +68,7 @@ public class LoginInterceptor implements HandlerInterceptor {
         UserHolder.saveUser(user);
 
         //刷新token有效期
-        stringRedisTemplate.expire(RedisConstants.LOGIN_USER_KEY+token,RedisConstants.LOGIN_USER_TTL, TimeUnit.SECONDS);
+        stringRedisTemplate.expire(RedisConstants.LOGIN_USER_KEY+token,RedisConstants.LOGIN_USER_TTL, TimeUnit.MINUTES);
 
         return true;
 

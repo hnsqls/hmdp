@@ -1364,6 +1364,8 @@ public class User implements Serializable {
 
 ![image-20240805184106413](images/readme.assets/image-20240805184106413.png)
 
+但是这样还不可以，redis中存的数据是完整的，会消耗redis的内存还有信息泄露的风险。可以select指定字段。还是比较推荐单独定义一个类。
+
 ### 2.6 集群的session共享问题
 
 **核心思路分析：**
