@@ -19,17 +19,17 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 //@Component  拦截器是非常轻量级的组件，只有再需要时才会被调用
+
+/**
+ * 拦截器，拦截需要认证的业务
+ */
 public class LoginInterceptor implements HandlerInterceptor {
 
 
-    private StringRedisTemplate stringRedisTemplate;
-
-    public LoginInterceptor(StringRedisTemplate stringRedisTemplate) {
-        this.stringRedisTemplate = stringRedisTemplate;
-    }
-
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+
+        // todo: session登录方式
 //        //1. 获取session
 //        HttpSession session = request.getSession();
 //        // 2. 获取session中的用户
@@ -44,32 +44,40 @@ public class LoginInterceptor implements HandlerInterceptor {
 //
 //        return true;
 
-        System.out.println("拦截器执行了");
-        // TODO 1. 获取token
-        String token = request.getHeader("authorization");
-        if (StrUtil.isBlank(token)) {
-            //为空
+
+        // todo: token登录方式
+//        // TODO 1. 获取token
+//        String token = request.getHeader("authorization");
+//        if (StrUtil.isBlank(token)) {
+//            //为空
+//            response.setStatus(401);
+//            return  false;
+//        }
+//
+//        // TODO 2.基于token获取redis中的用户
+//        Map<Object, Object> objectMap = stringRedisTemplate.opsForHash().entries(RedisConstants.LOGIN_USER_KEY+token);
+//        //判断用户是否存在
+//        if (objectMap.isEmpty()){
+//            //不存在
+//            response.setStatus(401);
+//            return false;
+//        }
+//        //将map转对象
+//        User user = BeanUtil.fillBeanWithMap(objectMap, new User(), false);
+//
+//        //保存再threadLocal
+//        UserHolder.saveUser(user);
+//
+//        //刷新token有效期
+//        stringRedisTemplate.expire(RedisConstants.LOGIN_USER_KEY+token,RedisConstants.LOGIN_USER_TTL, TimeUnit.MINUTES);
+
+        // todo 修改拦截器为双拦截器后的代码，直接根据全拦截器看ThreadLocal的值判断是否拦截
+        User user = UserHolder.getUser();
+        if (user == null) {
+            //没有用户信息 需要拦截
             response.setStatus(401);
             return  false;
         }
-
-        // TODO 2.基于token获取redis中的用户
-        Map<Object, Object> objectMap = stringRedisTemplate.opsForHash().entries(RedisConstants.LOGIN_USER_KEY+token);
-        //判断用户是否存在
-        if (objectMap.isEmpty()){
-            //不存在
-            response.setStatus(401);
-            return false;
-        }
-        //将map转对象
-        User user = BeanUtil.fillBeanWithMap(objectMap, new User(), false);
-
-        //保存再threadLocal
-        UserHolder.saveUser(user);
-
-        //刷新token有效期
-        stringRedisTemplate.expire(RedisConstants.LOGIN_USER_KEY+token,RedisConstants.LOGIN_USER_TTL, TimeUnit.MINUTES);
-
         return true;
 
     }
