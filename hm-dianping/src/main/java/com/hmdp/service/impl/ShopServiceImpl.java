@@ -52,7 +52,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 //        提取工具类使用
 //        Shop shop = cacheClient.queryWithPassThrough(CACHE_SHOP_KEY, id, Shop.class, id2 -> getById(id2), CACHE_NULL_TTL, TimeUnit.MINUTES);
 
-        //互斥锁解决缓存击穿
+//        互斥锁解决缓存击穿
 //        Shop shop = queryWithMutex(id);
 
 
@@ -60,16 +60,16 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
 
         //逻辑过期时间解决缓存击穿
-//        Shop shop = queryWithLogicalExpire(id);
+        Shop shop = queryWithLogicalExpire(id);
 
         //提取工具类使用逻辑缓存击穿
-        Shop shop = cacheClient.queryWithLogicalExpire(CACHE_SHOP_KEY, id, Shop.class, id2 -> getById(id2), CACHE_SHOP_TTL, TimeUnit.MINUTES);
+//        Shop shop = cacheClient.queryWithLogicalExpire(CACHE_SHOP_KEY, id, Shop.class, id2 -> getById(id2), CACHE_SHOP_TTL, TimeUnit.MINUTES);
+
 
 
         if (shop ==null){
-            return Result.fail("店铺不存在");
+            return Result.fail("商户不存在");
         }
-
 
         return Result.ok(shop);
     }
@@ -90,7 +90,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         this.updateById(shop);
         //2. 删除缓存
         stringRedisTemplate.delete(CACHE_SHOP_KEY+ id);
-        return null;
+        return Result.ok();
     }
 
     //endrange
@@ -101,7 +101,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
      * @return
      */
     private boolean tryLock(String key){
-        Boolean flag = stringRedisTemplate.opsForValue().setIfAbsent(key, "1", 10, TimeUnit.SECONDS);
+        Boolean flag = stringRedisTemplate.opsForValue().setIfAbsent(key, "1", 20, TimeUnit.SECONDS);
         return BooleanUtil.isTrue(flag);
 
     }
@@ -192,28 +192,42 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
         //获取互斥锁 失败  休眠重试
         String lockKey = "lock:shop" + id;
-        Shop shop = null;
-        try {
-            if (!tryLock(lockKey)) {
+        Shop shop=null;
 
-//                Thread.sleep(50);
+        try {
+            boolean isLock = tryLock(lockKey);
+            //获取锁失败
+            if (!isLock) {
+
+                System.out.println("获取锁失败，重试");
+                Thread.sleep(50);
                 return queryWithMutex(id);//递归 重试
             }
 
-            //获得锁
-            // 查数据库
-            shop = super.getById(id);
-            Thread.sleep(200);//模拟你测试环境 热点key失效模拟重建延迟
-            if (shop == null){
-                stringRedisTemplate.opsForValue().set(shopKey,"",CACHE_NULL_TTL,TimeUnit.SECONDS);
-                //            return Result.fail("没有该商户信息");
+            // 获取锁成功，再次检测缓存是否存在，存在就无需构建缓存，因为可能有的线程刚构建好缓存并释放锁，其他线程获取了锁
+            //检测缓存是否存在  存在
+            shopJson = stringRedisTemplate.opsForValue().get(shopKey);
+            if (StrUtil.isNotBlank(shopJson)) {
+                return JSONUtil.toBean(shopJson, Shop.class);
+            }
+            if (shopJson !=null){
                 return null;
             }
+            // 缓存不存在
+            // 查数据库
+             shop = super.getById(id);
+            Thread.sleep(200);//模拟你测试环境 热点key失效模拟重建延迟
+            if (shop == null){
+                //没有该商户信息
+                stringRedisTemplate.opsForValue().set(shopKey,"",CACHE_NULL_TTL,TimeUnit.SECONDS);
+                return null;
+            }
+            //有该商户信息
             stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY+ id, JSONUtil.toJsonStr(shop),CACHE_SHOP_TTL, TimeUnit.MINUTES);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            unlock(shopKey);
+            unlock(lockKey);
         }
         return shop;
 
@@ -277,7 +291,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
 
     /**
-     * 添加逻辑过期时间
+     * 缓存预热
      * @param id
      * @param expireSeconds
      */

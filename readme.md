@@ -1949,13 +1949,123 @@ isNotBlank情况如下![image-20240829194852255](images/readme.assets/image-2024
 
 第一种解决方案:
 
-因为锁能实现互斥性。假设线程过来，只能一个人一个人的来访问数据库，从而避免对于数据库访问压力过大，但这也会影响查询的性能，因为此时会让查询的性能从并行变成了串行，我们可以采用tryLock方法 + double check来解决这样的问题。
+因为锁能实现互斥性。假设线程过来，只能一个人一个人的来访问数据库，从而避免对于数据库访问压力过大，但这也会影响查询的性能，我们可以采用tryLock方法 + double check来解决这样的问题。
 
 
 
-假设现在线程1过来访问，他查询缓存没有命中，但是此时他获得到了锁的资源，那么线程1就会一个人去执行逻辑，假设现在线程2过来，线程2在执行过程中，并没有获得到锁，那么线程2就可以进行到休眠，直到线程1把锁释放后，线程2获得到锁，然后再来执行逻辑，此时就能够从缓存中拿到数据了。
+假设现在线程1过来访问，他查询缓存没有命中，但是此时他获得到了锁的资源，那么线程1就会一个人去执行逻辑，假设现在线程2过来，线程2在执行过程中，并没有获得到锁，那么线程2就重试获取缓存资源和锁（递归），直到线程1把锁释放后，线程2获得到锁或者缓存资源，可能线程二执行到获取缓存就获得到缓存就之间返回了，也可能没查到缓存，执行到获得了锁，这时候要再次校验一下是否获得了缓存。没有获得缓存在取构建缓存。
 
 ![image-20240829204843703](images/readme.assets/image-20240829204843703.png)
+
+```java
+ /**
+     * 获取锁
+     * @param key
+     * @return
+     */
+    private boolean tryLock(String key){
+        Boolean flag = stringRedisTemplate.opsForValue().setIfAbsent(key, "1", 20, TimeUnit.SECONDS);
+        return BooleanUtil.isTrue(flag);
+
+    }
+
+    /**
+     * 释放锁
+     * @param key
+     */
+    private  void unlock(String key){
+        stringRedisTemplate.delete(key);
+    }
+```
+
+
+
+```java
+/**
+     * 查询商户信息 缓存击穿互斥锁
+     * @param id
+     * @return
+     */
+    public Shop queryWithMutex(Long id){
+        String shopKey = CACHE_SHOP_KEY+ id;
+
+        // 1. 从redis中查询店铺缓存
+        String shopJson = stringRedisTemplate.opsForValue().get(shopKey);
+
+        //2.判断是否命中缓存  isnotblank false: "" or "/t/n" or "null"
+        if(StrUtil.isNotBlank(shopJson)){
+            // 3.若命中则返回信息
+            Shop shop = JSONUtil.toBean(shopJson, Shop.class);
+            return shop;
+        }
+        //数据穿透判空   不是null 就是空串 ""
+        if (shopJson != null){
+            //返回错误信息
+//            return  Result.fail("没有该商户信息（缓存）");
+            return null;
+        }
+        //4.没有命中缓存，查数据库
+        //todo :解决缓存击穿  不能直接查数据库。 利用互斥锁解决
+
+        /**
+         * 实现缓存重建
+         * 1. 获取互斥锁
+         * 2. 判断是否成功
+         * 3. 失败就休眠重试
+         * 4.成功 查数据库
+         * 5 数据库存在该数据写入缓存
+         * 6 不存在返回错误信息并写入缓存“”
+         * 7 释放锁
+         *
+         */
+
+        //获取互斥锁 失败  休眠重试
+        String lockKey = "lock:shop" + id;
+        Shop shop=null;
+
+        try {
+            boolean isLock = tryLock(lockKey);
+            //获取锁失败
+            if (!isLock) {
+
+                System.out.println("获取锁失败，重试");
+                Thread.sleep(50);
+                return queryWithMutex(id);//递归 重试
+            }
+
+            // 获取锁成功，再次检测缓存是否存在，存在就无需构建缓存，因为可能有的线程刚构建好缓存并释放锁，其他线程获取了锁
+            //检测缓存是否存在  存在
+            shopJson = stringRedisTemplate.opsForValue().get(shopKey);
+            if (StrUtil.isNotBlank(shopJson)) {
+                return JSONUtil.toBean(shopJson, Shop.class);
+            }
+            if (shopJson !=null){
+                return null;
+            }
+            // 缓存不存在
+            // 查数据库
+             shop = super.getById(id);
+            Thread.sleep(200);//模拟你测试环境 热点key失效模拟重建延迟
+            if (shop == null){
+                //没有该商户信息
+                stringRedisTemplate.opsForValue().set(shopKey,"",CACHE_NULL_TTL,TimeUnit.SECONDS);
+                return null;
+            }
+            //有该商户信息
+            stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY+ id, JSONUtil.toJsonStr(shop),CACHE_SHOP_TTL, TimeUnit.MINUTES);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } finally {
+            unlock(lockKey);
+        }
+        return shop;
+
+    }
+```
+
+
+
+
 
 解决方案二、逻辑过期方案
 
@@ -2059,7 +2169,9 @@ isNotBlank情况如下![image-20240829194852255](images/readme.assets/image-2024
                 return queryWithMutex(id);//递归 重试
             }
 
-            //获得锁
+            //获得锁 
+            // todo: 二次校验缓存是否有值， 因为可能上个线程构建好缓存了然后释放锁，其他线程刚获得锁
+            
             // 查数据库
             shop = super.getById(id);
             Thread.sleep(200);//模拟你测试环境 热点key失效模拟重建延迟
@@ -2072,7 +2184,7 @@ isNotBlank情况如下![image-20240829194852255](images/readme.assets/image-2024
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            unlock(shopKey);
+            unlock(lockKey);
         }
         return shop;
 

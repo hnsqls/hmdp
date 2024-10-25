@@ -26,7 +26,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
                         "/user/code",
                         "/user/login",
                         "/shop-type/**",
-                        "/api/shop/**",
+                        "/shop/**",
                         "/blog/hot"
                 ).order(1);
 
