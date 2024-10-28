@@ -12,6 +12,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.RedisData;
 import lombok.SneakyThrows;
+import org.springframework.beans.BeanUtils;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -54,16 +55,15 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
 //        互斥锁解决缓存击穿
 //        Shop shop = queryWithMutex(id);
-
-
-
+        //提取工具类使用 互斥锁解决缓存击穿
+        Shop shop = cacheClient.queryMutex(CACHE_SHOP_KEY, id, Shop.class, this::getById, "lock:shop", CACHE_NULL_TTL, TimeUnit.MINUTES);
 
 
         //逻辑过期时间解决缓存击穿
-        Shop shop = queryWithLogicalExpire(id);
+//        Shop shop = queryWithLogicalExpire(id);
 
         //提取工具类使用逻辑缓存击穿
-//        Shop shop = cacheClient.queryWithLogicalExpire(CACHE_SHOP_KEY, id, Shop.class, id2 -> getById(id2), CACHE_SHOP_TTL, TimeUnit.MINUTES);
+//        Shop shop = cacheClient.queryWithLogicalExpire(CACHE_SHOP_KEY, id, Shop.class, this::getById,"lock:shop:" ,CACHE_SHOP_TTL, TimeUnit.MINUTES);
 
 
 
@@ -162,6 +162,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
         // 1. 从redis中查询店铺缓存
         String shopJson = stringRedisTemplate.opsForValue().get(shopKey);
+
 
         //2.判断是否命中缓存  isnotblank false: "" or "/t/n" or "null"
         if(StrUtil.isNotBlank(shopJson)){
