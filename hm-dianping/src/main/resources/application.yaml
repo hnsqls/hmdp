@@ -9,7 +9,7 @@ spring:
     username: root
     password: root
   redis:
-    host: 192.168.231.130
+    host: 192.168.231.134
     port: 6379
 #    password: 123321
     lettuce:
@@ -25,3 +25,17 @@ mybatis-plus:
 logging:
   level:
     com.hmdp: debug
+
+# 接口文档配置 http://localhost:8080/api/doc.html
+knife4j:
+  enable: true  # 启用 Knife4j
+  openapi:
+    title: "接口文档"  # 设置文档标题
+    version: "1.0"  # 设置文档版本
+    group:
+      default:  # 默认组配置
+        api-rule: package  # 按照包扫描规则生成文档
+        api-rule-resources:
+          - com.hmdp.controller  # 要扫描的包路径，通常是你的控制器所在的包
+
+
